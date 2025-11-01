@@ -1,0 +1,333 @@
+{
+  "name": "文章解析自動化工作流程",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      },
+      "name": "每日排程觸發",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "automatic",
+      "notes": "每天自動執行一次"
+    },
+    {
+      "parameters": {
+        "url": "https://your-api.com/daily-articles",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "取得文章列表",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 300],
+      "notes": "從你的 API 取得每日文章列表\n回傳格式：[{url: 'xxx', id: 'xxx'}]"
+    },
+    {
+      "parameters": {
+        "batchSize": 5,
+        "options": {
+          "batchInterval": 2000
+        }
+      },
+      "name": "分批處理",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [650, 300],
+      "notes": "每批處理 5 篇文章\n間隔 2 秒避免過載"
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:3000/api/parse",
+        "authentication": "none",
+        "requestMethod": "POST",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        },
+        "bodyParametersJson": "={\n  \"url\": \"{{ $json.url }}\"\n}"
+      },
+      "name": "解析文章內容",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 300],
+      "notes": "呼叫 Parser API 解析文章"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "檢查是否成功",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1050, 300],
+      "notes": "檢查解析是否成功"
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "article_id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "title",
+              "value": "={{ $json.data.title }}"
+            },
+            {
+              "name": "author",
+              "value": "={{ $json.data.author }}"
+            },
+            {
+              "name": "content",
+              "value": "={{ $json.data.content }}"
+            },
+            {
+              "name": "excerpt",
+              "value": "={{ $json.data.excerpt }}"
+            },
+            {
+              "name": "url",
+              "value": "={{ $json.data.url }}"
+            },
+            {
+              "name": "published_date",
+              "value": "={{ $json.data.date_published }}"
+            },
+            {
+              "name": "image_url",
+              "value": "={{ $json.data.lead_image_url }}"
+            }
+          ],
+          "number": [
+            {
+              "name": "word_count",
+              "value": "={{ $json.data.word_count }}"
+            }
+          ]
+        }
+      },
+      "name": "整理資料格式",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1250, 200],
+      "notes": "提取需要的欄位"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "articles",
+        "columns": "article_id,title,author,content,excerpt,url,published_date,image_url,word_count,created_at",
+        "additionalFields": {}
+      },
+      "name": "儲存到資料庫",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1450, 200],
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "將解析結果儲存到資料庫\n（需要先設定 Postgres 連線）"
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "error_url",
+              "value": "={{ $json.url }}"
+            },
+            {
+              "name": "error_message",
+              "value": "={{ $json.error }}"
+            },
+            {
+              "name": "error_time",
+              "value": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "name": "記錄錯誤",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1250, 400],
+      "notes": "記錄失敗的文章"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "parse_errors",
+        "columns": "error_url,error_message,error_time",
+        "additionalFields": {}
+      },
+      "name": "儲存錯誤記錄",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1450, 400],
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "將錯誤記錄儲存到資料庫"
+    },
+    {
+      "parameters": {
+        "channel": "#notifications",
+        "text": "=✅ 今日文章解析完成\n成功: {{ $json.success_count }} 篇\n失敗: {{ $json.fail_count }} 篇",
+        "otherOptions": {}
+      },
+      "name": "發送完成通知",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [1650, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "notes": "發送 Slack 通知\n（可改用其他通知方式）"
+    }
+  ],
+  "connections": {
+    "每日排程觸發": {
+      "main": [
+        [
+          {
+            "node": "取得文章列表",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "取得文章列表": {
+      "main": [
+        [
+          {
+            "node": "分批處理",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "分批處理": {
+      "main": [
+        [
+          {
+            "node": "解析文章內容",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析文章內容": {
+      "main": [
+        [
+          {
+            "node": "檢查是否成功",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "檢查是否成功": {
+      "main": [
+        [
+          {
+            "node": "整理資料格式",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "記錄錯誤",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "整理資料格式": {
+      "main": [
+        [
+          {
+            "node": "儲存到資料庫",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "記錄錯誤": {
+      "main": [
+        [
+          {
+            "node": "儲存錯誤記錄",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "儲存到資料庫": {
+      "main": [
+        [
+          {
+            "node": "發送完成通知",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-11-01T00:00:00.000Z",
+  "versionId": "1"
+}
+

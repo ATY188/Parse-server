@@ -1,0 +1,21 @@
+{
+  "name": "news_parser",
+  "version": "1.0.0",
+  "main": "parser-server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node parser-server.js",
+    "dev": "node --watch parser-server.js",
+    "test": "node test-parser.js",
+    "test:url": "node test-parser.js",
+    "batch": "node n8n-batch-parser.js example-articles.json results.json"
+  },
+  "keywords": ["parser", "news", "web scraper", "content extraction"],
+  "author": "",
+  "license": "ISC",
+  "description": "網頁內容解析器 API - 使用 @postlight/parser 自動提取網頁文章內容",
+  "dependencies": {
+    "@postlight/parser": "^2.2.3",
+    "express": "^5.1.0"
+  }
+}
