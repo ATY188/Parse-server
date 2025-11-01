@@ -19,6 +19,7 @@ import trafilatura
 import httpx
 from datetime import datetime
 import uvicorn
+import os
 
 # 建立 FastAPI 應用
 app = FastAPI(
@@ -332,7 +333,6 @@ async def health_check():
 
 if __name__ == "__main__":
     # 從環境變數讀取埠號（Railway 會提供），預設 3000
-    import os
     port = int(os.getenv("PORT", 3000))
     
     print("🚀 Parser 伺服器已啟動！（Python 版本）")
