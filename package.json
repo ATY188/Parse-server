@@ -16,6 +16,7 @@
   "description": "網頁內容解析器 API - 使用 @postlight/parser 自動提取網頁文章內容",
   "dependencies": {
     "@postlight/parser": "^2.2.3",
+    "axios": "^1.6.0",
     "express": "^5.1.0"
   }
 }
