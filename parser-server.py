@@ -79,6 +79,8 @@ class ParseRequest(BaseModel):
 class ParseDynamicRequest(BaseModel):
     url: str
     wait_for: Optional[str] = None
+    block_ads: Optional[bool] = True  # 預設屏蔽廣告
+    stealth_mode: Optional[bool] = True  # 預設啟用反爬蟲模式
     
     @validator('url')
     def validate_url(cls, v):
@@ -100,13 +102,20 @@ class ParseWebhookRequest(BaseModel):
         return v
 
 
-async def fetch_with_playwright(url: str, wait_for: Optional[str] = None) -> str:
+async def fetch_with_playwright(
+    url: str, 
+    wait_for: Optional[str] = None,
+    block_ads: bool = True,
+    stealth_mode: bool = True
+) -> str:
     """
-    使用 Playwright 獲取動態網頁內容
+    使用 Playwright 獲取動態網頁內容（增強版）
     
     Args:
         url: 要訪問的網頁 URL
         wait_for: 等待特定元素（CSS selector）出現，例如 'article' 或 '.content'
+        block_ads: 是否屏蔽廣告（預設 True）
+        stealth_mode: 是否啟用反爬蟲模式（預設 True）
         
     Returns:
         渲染後的 HTML 內容
@@ -117,28 +126,138 @@ async def fetch_with_playwright(url: str, wait_for: Optional[str] = None) -> str
     async with async_playwright() as p:
         try:
             # 啟動 Chromium 瀏覽器（無頭模式）
-            browser = await p.chromium.launch(headless=True)
+            print(f"[Playwright] 啟動瀏覽器...")
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    '--disable-blink-features=AutomationControlled',  # 禁用自動化控制特徵
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                ]
+            )
             
-            # 創建新的瀏覽器上下文（可以設定 user-agent 等）
+            # 創建新的瀏覽器上下文（模擬真實用戶）
             context = await browser.new_context(
                 user_agent=get_random_user_agent(),
-                viewport={'width': 1920, 'height': 1080}
+                viewport={'width': 1920, 'height': 1080},
+                locale='zh-TW',
+                timezone_id='Asia/Taipei',
+                color_scheme='light',
+                extra_http_headers={
+                    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                }
             )
+            
+            # 如果啟用廣告屏蔽
+            if block_ads:
+                print(f"[Playwright] 啟用廣告屏蔽")
+                ad_domains = [
+                    'doubleclick.net', 'googlesyndication.com', 'googletagmanager.com',
+                    'google-analytics.com', 'facebook.com/tr/', 'scorecardresearch.com',
+                    'ad.doubleclick.net', 'static.ads-twitter.com', 'ads.yahoo.com',
+                    'pagead2.googlesyndication.com', 'adservice.google.com',
+                    'analytics.google.com', 'googleadservices.com'
+                ]
+                
+                await context.route("**/*", lambda route: (
+                    route.abort() if any(ad in route.request.url for ad in ad_domains)
+                    else route.continue_()
+                ))
             
             # 創建新頁面
             page = await context.new_page()
+            
+            # 如果啟用反爬蟲模式
+            if stealth_mode:
+                print(f"[Playwright] 啟用反爬蟲模式")
+                # 隱藏 webdriver 特徵
+                await page.add_init_script("""
+                    // 移除 webdriver 標記
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => false
+                    });
+                    
+                    // 偽裝 Chrome 對象
+                    window.chrome = {
+                        runtime: {}
+                    };
+                    
+                    // 修改 permissions
+                    const originalQuery = window.navigator.permissions.query;
+                    window.navigator.permissions.query = (parameters) => (
+                        parameters.name === 'notifications' ?
+                            Promise.resolve({ state: Notification.permission }) :
+                            originalQuery(parameters)
+                    );
+                    
+                    // 偽裝 plugins
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5]
+                    });
+                    
+                    // 偽裝 languages
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['zh-TW', 'zh', 'en-US', 'en']
+                    });
+                """)
             
             # 訪問網頁
             print(f"[Playwright] 正在訪問: {url}")
             await page.goto(url, wait_until='networkidle', timeout=30000)
             
+            # 隨機延遲（模擬人類行為）
+            delay = random.uniform(1, 2.5)
+            print(f"[Playwright] 隨機延遲 {delay:.1f} 秒...")
+            await asyncio.sleep(delay)
+            
+            # 移除廣告元素（DOM 層面）
+            if block_ads:
+                await page.evaluate("""() => {
+                    // 移除常見廣告元素
+                    const selectors = [
+                        '[class*="ad-"]', '[class*="ad_"]', '[id*="ad-"]', '[id*="ad_"]',
+                        '[class*="advertisement"]', '[class*="banner"]',
+                        'iframe[src*="ads"]', 'iframe[src*="doubleclick"]',
+                        '.ad', '.ads', '#ad', '#ads'
+                    ];
+                    
+                    selectors.forEach(selector => {
+                        try {
+                            document.querySelectorAll(selector).forEach(el => el.remove());
+                        } catch(e) {}
+                    });
+                }""")
+            
             # 如果指定了等待元素，等待該元素出現
             if wait_for:
                 print(f"[Playwright] 等待元素: {wait_for}")
-                await page.wait_for_selector(wait_for, timeout=10000)
-            else:
-                # 預設等待 2 秒，讓 JavaScript 執行
-                await asyncio.sleep(2)
+                try:
+                    await page.wait_for_selector(wait_for, timeout=10000)
+                except:
+                    print(f"[Playwright] 警告：元素 {wait_for} 未找到，繼續提取內容")
+            
+            # 滾動頁面以觸發懶加載
+            print(f"[Playwright] 滾動頁面以載入動態內容...")
+            await page.evaluate("""async () => {
+                await new Promise((resolve) => {
+                    let totalHeight = 0;
+                    const distance = 100;
+                    const timer = setInterval(() => {
+                        const scrollHeight = document.body.scrollHeight;
+                        window.scrollBy(0, distance);
+                        totalHeight += distance;
+                        
+                        if(totalHeight >= scrollHeight){
+                            clearInterval(timer);
+                            resolve();
+                        }
+                    }, 100);
+                });
+            }""")
+            
+            # 再等待一下，確保內容載入完成
+            await asyncio.sleep(1)
             
             # 獲取渲染後的 HTML
             html_content = await page.content()
@@ -146,7 +265,7 @@ async def fetch_with_playwright(url: str, wait_for: Optional[str] = None) -> str
             # 關閉瀏覽器
             await browser.close()
             
-            print(f"[Playwright] 成功獲取內容，長度: {len(html_content)}")
+            print(f"[Playwright] ✅ 成功獲取內容，長度: {len(html_content)}")
             return html_content
             
         except PlaywrightTimeout as e:
@@ -157,21 +276,25 @@ async def fetch_with_playwright(url: str, wait_for: Optional[str] = None) -> str
 
 async def fetch_and_parse_with_playwright(
     url: str,
-    wait_for: Optional[str] = None
+    wait_for: Optional[str] = None,
+    block_ads: bool = True,
+    stealth_mode: bool = True
 ) -> Dict[str, Any]:
     """
-    使用 Playwright 下載並解析動態網頁內容
+    使用 Playwright 下載並解析動態網頁內容（增強版）
     
     Args:
         url: 要解析的網頁 URL
         wait_for: 等待特定元素出現
+        block_ads: 是否屏蔽廣告
+        stealth_mode: 是否啟用反爬蟲模式
         
     Returns:
         解析後的資料字典
     """
     try:
         # 使用 Playwright 獲取渲染後的 HTML
-        html_content = await fetch_with_playwright(url, wait_for)
+        html_content = await fetch_with_playwright(url, wait_for, block_ads, stealth_mode)
         
         # 使用 trafilatura 解析內容
         try:
@@ -243,14 +366,17 @@ async def root():
     return {
         "message": "歡迎使用網頁內容解析器 API (Python 增強版)",
         "framework": "FastAPI + trafilatura + Playwright",
-        "version": "1.3.0",
+        "version": "1.4.0",
         "features": [
             "自動重試機制（處理 403/429 錯誤）",
             "隨機 User-Agent",
             "增強的 HTTP headers",
             "SSL 錯誤處理",
             "指數退避（Exponential Backoff）",
-            "Playwright 支援（處理動態 JavaScript 網站）"
+            "Playwright 支援（處理動態 JavaScript 網站）",
+            "廣告屏蔽（Network 和 DOM 層面）",
+            "反爬蟲模式（隱藏 webdriver 特徵）",
+            "自動滾動載入懶加載內容"
         ],
         "endpoints": {
             "parse": {
@@ -273,9 +399,11 @@ async def root():
                 "path": "/api/parse-dynamic",
                 "body": {
                     "url": "要解析的網頁 URL",
-                    "wait_for": "(選填) 等待特定 CSS 選擇器，例如 'article' 或 '.content'"
+                    "wait_for": "(選填) 等待特定 CSS 選擇器，例如 'article' 或 '.content'",
+                    "block_ads": "(選填) 是否屏蔽廣告，預設 true",
+                    "stealth_mode": "(選填) 是否啟用反爬蟲模式，預設 true"
                 },
-                "description": "使用 Playwright 解析動態網站（支援 JavaScript 渲染）⭐ 推薦用於 SPA 網站"
+                "description": "使用 Playwright 解析動態網站（支援 JavaScript 渲染、廣告屏蔽、反爬蟲）⭐ 推薦用於 SPA 網站和有反爬蟲的網站"
             },
             "parseWebhook": {
                 "method": "POST",
@@ -564,15 +692,21 @@ async def parse_url_get(url: str, max_retries: int = 3, skip_ssl: bool = False):
 @app.post("/api/parse-dynamic")
 async def parse_url_dynamic(request: ParseDynamicRequest):
     """
-    POST 方法：使用 Playwright 解析動態網站（支援 JavaScript 渲染）
+    POST 方法：使用 Playwright 解析動態網站（增強版：支援廣告屏蔽和反爬蟲）
     
     適用於：
     - React/Vue/Angular 等單頁應用（SPA）
     - JavaScript 動態載入內容的網站
     - 需要等待特定元素出現的網站
+    - 有廣告干擾的網站
+    - 有反爬蟲機制的網站
     
     Args:
-        request: 包含 url 和 wait_for 的請求物件
+        request: 包含以下欄位的請求物件
+            - url: 要解析的網頁 URL
+            - wait_for: (選填) 等待特定 CSS 選擇器
+            - block_ads: (選填) 是否屏蔽廣告，預設 True
+            - stealth_mode: (選填) 是否啟用反爬蟲模式，預設 True
         
     Returns:
         解析後的網頁內容
@@ -581,15 +715,23 @@ async def parse_url_dynamic(request: ParseDynamicRequest):
         POST /api/parse-dynamic
         {
             "url": "https://applealmond.com/posts/296254",
-            "wait_for": ".post-content"
+            "wait_for": ".post-content",
+            "block_ads": true,
+            "stealth_mode": true
         }
     """
     print(f"正在使用 Playwright 解析: {request.url}")
+    print(f"廣告屏蔽: {request.block_ads}, 反爬蟲模式: {request.stealth_mode}")
     if request.wait_for:
         print(f"等待元素: {request.wait_for}")
     
     try:
-        result = await fetch_and_parse_with_playwright(request.url, request.wait_for)
+        result = await fetch_and_parse_with_playwright(
+            request.url, 
+            request.wait_for,
+            request.block_ads,
+            request.stealth_mode
+        )
         return result
         
     except HTTPException as e:
@@ -706,13 +848,16 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "service": "parser-api",
-        "version": "1.3.0",
+        "version": "1.4.0",
         "features": [
             "retry-mechanism",
             "enhanced-headers",
             "ssl-handling",
             "exponential-backoff",
-            "playwright-dynamic-rendering"
+            "playwright-dynamic-rendering",
+            "ad-blocking",
+            "anti-bot-detection",
+            "lazy-loading-support"
         ]
     }
 
