@@ -232,7 +232,8 @@ async def fetch_and_parse_with_retry(
                 "language": metadata.language if metadata else None
             }
             
-            print(f"[成功] 嘗試 {attempt}: {parsed_data.get('title', 'No title')[:50]}")
+            title_preview = parsed_data.get('title') or 'No title'
+            print(f"[成功] 嘗試 {attempt}: {title_preview[:50] if title_preview else 'No title'}")
             return {
                 "success": True,
                 "data": parsed_data,
