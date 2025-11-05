@@ -76,6 +76,16 @@ class ParseRequest(BaseModel):
             raise ValueError('URL 必須以 http:// 或 https:// 開頭')
         return v
 
+class ParseDynamicRequest(BaseModel):
+    url: str
+    wait_for: Optional[str] = None
+    
+    @validator('url')
+    def validate_url(cls, v):
+        if not v.startswith(('http://', 'https://')):
+            raise ValueError('URL 必須以 http:// 或 https:// 開頭')
+        return v
+
 class ParseWebhookRequest(BaseModel):
     url: str
     webhook_url: str
@@ -552,7 +562,7 @@ async def parse_url_get(url: str, max_retries: int = 3, skip_ssl: bool = False):
 
 
 @app.post("/api/parse-dynamic")
-async def parse_url_dynamic(url: str, wait_for: Optional[str] = None):
+async def parse_url_dynamic(request: ParseDynamicRequest):
     """
     POST 方法：使用 Playwright 解析動態網站（支援 JavaScript 渲染）
     
@@ -562,8 +572,7 @@ async def parse_url_dynamic(url: str, wait_for: Optional[str] = None):
     - 需要等待特定元素出現的網站
     
     Args:
-        url: 要解析的網頁 URL
-        wait_for: (選填) 等待特定 CSS 選擇器，例如 'article' 或 '.content'
+        request: 包含 url 和 wait_for 的請求物件
         
     Returns:
         解析後的網頁內容
@@ -575,16 +584,12 @@ async def parse_url_dynamic(url: str, wait_for: Optional[str] = None):
             "wait_for": ".post-content"
         }
     """
-    if not url:
-        raise HTTPException(
-            status_code=400,
-            detail="請提供要解析的網址 (url)"
-        )
-    
-    print(f"正在使用 Playwright 解析: {url}")
+    print(f"正在使用 Playwright 解析: {request.url}")
+    if request.wait_for:
+        print(f"等待元素: {request.wait_for}")
     
     try:
-        result = await fetch_and_parse_with_playwright(url, wait_for)
+        result = await fetch_and_parse_with_playwright(request.url, request.wait_for)
         return result
         
     except HTTPException as e:
