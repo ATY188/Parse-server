@@ -10,6 +10,9 @@ httpx==0.26.0
 # 網頁內容解析
 trafilatura==1.7.0
 
+# 瀏覽器自動化（用於動態網站）
+playwright==1.40.0
+
 # 資料驗證
 pydantic==2.5.3
 

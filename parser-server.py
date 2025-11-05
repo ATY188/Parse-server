@@ -23,6 +23,7 @@ import uvicorn
 import os
 import asyncio
 import random
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 # 建立 FastAPI 應用
 app = FastAPI(
@@ -89,20 +90,157 @@ class ParseWebhookRequest(BaseModel):
         return v
 
 
+async def fetch_with_playwright(url: str, wait_for: Optional[str] = None) -> str:
+    """
+    使用 Playwright 獲取動態網頁內容
+    
+    Args:
+        url: 要訪問的網頁 URL
+        wait_for: 等待特定元素（CSS selector）出現，例如 'article' 或 '.content'
+        
+    Returns:
+        渲染後的 HTML 內容
+        
+    Raises:
+        Exception: 當瀏覽器操作失敗時
+    """
+    async with async_playwright() as p:
+        try:
+            # 啟動 Chromium 瀏覽器（無頭模式）
+            browser = await p.chromium.launch(headless=True)
+            
+            # 創建新的瀏覽器上下文（可以設定 user-agent 等）
+            context = await browser.new_context(
+                user_agent=get_random_user_agent(),
+                viewport={'width': 1920, 'height': 1080}
+            )
+            
+            # 創建新頁面
+            page = await context.new_page()
+            
+            # 訪問網頁
+            print(f"[Playwright] 正在訪問: {url}")
+            await page.goto(url, wait_until='networkidle', timeout=30000)
+            
+            # 如果指定了等待元素，等待該元素出現
+            if wait_for:
+                print(f"[Playwright] 等待元素: {wait_for}")
+                await page.wait_for_selector(wait_for, timeout=10000)
+            else:
+                # 預設等待 2 秒，讓 JavaScript 執行
+                await asyncio.sleep(2)
+            
+            # 獲取渲染後的 HTML
+            html_content = await page.content()
+            
+            # 關閉瀏覽器
+            await browser.close()
+            
+            print(f"[Playwright] 成功獲取內容，長度: {len(html_content)}")
+            return html_content
+            
+        except PlaywrightTimeout as e:
+            raise Exception(f"Playwright 超時: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Playwright 錯誤: {str(e)}")
+
+
+async def fetch_and_parse_with_playwright(
+    url: str,
+    wait_for: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    使用 Playwright 下載並解析動態網頁內容
+    
+    Args:
+        url: 要解析的網頁 URL
+        wait_for: 等待特定元素出現
+        
+    Returns:
+        解析後的資料字典
+    """
+    try:
+        # 使用 Playwright 獲取渲染後的 HTML
+        html_content = await fetch_with_playwright(url, wait_for)
+        
+        # 使用 trafilatura 解析內容
+        try:
+            text_content = trafilatura.extract(
+                html_content,
+                include_comments=False,
+                include_tables=True,
+                no_fallback=False
+            )
+        except Exception as e:
+            print(f"[警告] trafilatura.extract 失敗: {e}")
+            text_content = None
+        
+        # 提取元數據
+        try:
+            metadata = trafilatura.extract_metadata(html_content)
+        except Exception as e:
+            print(f"[警告] trafilatura.extract_metadata 失敗: {e}")
+            metadata = None
+        
+        # 提取 XML 格式內容
+        try:
+            html_formatted = trafilatura.extract(
+                html_content,
+                include_comments=False,
+                include_tables=True,
+                no_fallback=False,
+                output_format='xml'
+            )
+        except Exception as e:
+            print(f"[警告] trafilatura.extract (XML) 失敗: {e}")
+            html_formatted = None
+        
+        # 整理回傳資料
+        parsed_data = {
+            "title": getattr(metadata, 'title', None) if metadata else None,
+            "author": getattr(metadata, 'author', None) if metadata else None,
+            "date_published": getattr(metadata, 'date', None) if metadata else None,
+            "url": getattr(metadata, 'url', url) if metadata else url,
+            "domain": getattr(metadata, 'sitename', None) if metadata else None,
+            "description": getattr(metadata, 'description', None) if metadata else None,
+            "categories": getattr(metadata, 'categories', None) if metadata else None,
+            "tags": getattr(metadata, 'tags', None) if metadata else None,
+            "content": html_formatted or text_content,
+            "text_content": text_content,
+            "excerpt": text_content[:200] + "..." if text_content and len(text_content) > 200 else text_content,
+            "word_count": len(text_content.split()) if text_content else 0,
+            "language": getattr(metadata, 'language', None) if metadata else None,
+            "rendering_method": "playwright"
+        }
+        
+        return {
+            "success": True,
+            "data": parsed_data,
+            "method": "playwright"
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"使用 Playwright 解析失敗: {str(e)}"
+        )
+
+
 # 首頁路由
 @app.get("/")
 async def root():
     """API 首頁 - 顯示可用端點"""
     return {
         "message": "歡迎使用網頁內容解析器 API (Python 增強版)",
-        "framework": "FastAPI + trafilatura",
-        "version": "1.2.0",
+        "framework": "FastAPI + trafilatura + Playwright",
+        "version": "1.3.0",
         "features": [
             "自動重試機制（處理 403/429 錯誤）",
             "隨機 User-Agent",
             "增強的 HTTP headers",
             "SSL 錯誤處理",
-            "指數退避（Exponential Backoff）"
+            "指數退避（Exponential Backoff）",
+            "Playwright 支援（處理動態 JavaScript 網站）"
         ],
         "endpoints": {
             "parse": {
@@ -119,6 +257,15 @@ async def root():
                 "method": "GET",
                 "path": "/api/parse?url=YOUR_URL",
                 "description": "使用 GET 方法解析網頁內容"
+            },
+            "parseDynamic": {
+                "method": "POST",
+                "path": "/api/parse-dynamic",
+                "body": {
+                    "url": "要解析的網頁 URL",
+                    "wait_for": "(選填) 等待特定 CSS 選擇器，例如 'article' 或 '.content'"
+                },
+                "description": "使用 Playwright 解析動態網站（支援 JavaScript 渲染）⭐ 推薦用於 SPA 網站"
             },
             "parseWebhook": {
                 "method": "POST",
@@ -404,6 +551,52 @@ async def parse_url_get(url: str, max_retries: int = 3, skip_ssl: bool = False):
         )
 
 
+@app.post("/api/parse-dynamic")
+async def parse_url_dynamic(url: str, wait_for: Optional[str] = None):
+    """
+    POST 方法：使用 Playwright 解析動態網站（支援 JavaScript 渲染）
+    
+    適用於：
+    - React/Vue/Angular 等單頁應用（SPA）
+    - JavaScript 動態載入內容的網站
+    - 需要等待特定元素出現的網站
+    
+    Args:
+        url: 要解析的網頁 URL
+        wait_for: (選填) 等待特定 CSS 選擇器，例如 'article' 或 '.content'
+        
+    Returns:
+        解析後的網頁內容
+        
+    Example:
+        POST /api/parse-dynamic
+        {
+            "url": "https://applealmond.com/posts/296254",
+            "wait_for": ".post-content"
+        }
+    """
+    if not url:
+        raise HTTPException(
+            status_code=400,
+            detail="請提供要解析的網址 (url)"
+        )
+    
+    print(f"正在使用 Playwright 解析: {url}")
+    
+    try:
+        result = await fetch_and_parse_with_playwright(url, wait_for)
+        return result
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        print(f"Playwright 解析錯誤: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"使用 Playwright 解析網頁時發生錯誤: {str(e)}"
+        )
+
+
 async def process_and_webhook(
     url: str, 
     webhook_url: str, 
@@ -508,12 +701,13 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "service": "parser-api",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "features": [
             "retry-mechanism",
             "enhanced-headers",
             "ssl-handling",
-            "exponential-backoff"
+            "exponential-backoff",
+            "playwright-dynamic-rendering"
         ]
     }
 
