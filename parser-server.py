@@ -204,7 +204,7 @@ async def fetch_with_playwright(
             
             # 訪問網頁
             print(f"[Playwright] 正在訪問: {url}")
-            await page.goto(url, wait_until='networkidle', timeout=30000)
+            await page.goto(url, wait_until='networkidle', timeout=60000)  # 增加到 60 秒
             
             # 隨機延遲（模擬人類行為）
             delay = random.uniform(1, 2.5)
@@ -233,7 +233,7 @@ async def fetch_with_playwright(
             if wait_for:
                 print(f"[Playwright] 等待元素: {wait_for}")
                 try:
-                    await page.wait_for_selector(wait_for, timeout=10000)
+                    await page.wait_for_selector(wait_for, timeout=20000)  # 增加到 20 秒
                 except:
                     print(f"[Playwright] 警告：元素 {wait_for} 未找到，繼續提取內容")
             
