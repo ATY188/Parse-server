@@ -196,40 +196,52 @@ async def fetch_and_parse_with_retry(
                 html_content = response.text
             
             # 使用 trafilatura 解析內容
-            text_content = trafilatura.extract(
-                html_content,
-                include_comments=False,
-                include_tables=True,
-                no_fallback=False
-            )
+            try:
+                text_content = trafilatura.extract(
+                    html_content,
+                    include_comments=False,
+                    include_tables=True,
+                    no_fallback=False
+                )
+            except Exception as e:
+                print(f"[警告] trafilatura.extract 失敗: {e}")
+                text_content = None
             
             # 提取完整資訊（包含元數據）
-            metadata = trafilatura.extract_metadata(html_content)
+            try:
+                metadata = trafilatura.extract_metadata(html_content)
+            except Exception as e:
+                print(f"[警告] trafilatura.extract_metadata 失敗: {e}")
+                metadata = None
             
             # 提取 HTML 格式的內容
-            html_formatted = trafilatura.extract(
-                html_content,
-                include_comments=False,
-                include_tables=True,
-                no_fallback=False,
-                output_format='xml'
-            )
+            try:
+                html_formatted = trafilatura.extract(
+                    html_content,
+                    include_comments=False,
+                    include_tables=True,
+                    no_fallback=False,
+                    output_format='xml'
+                )
+            except Exception as e:
+                print(f"[警告] trafilatura.extract (XML) 失敗: {e}")
+                html_formatted = None
             
             # 整理回傳資料
             parsed_data = {
-                "title": metadata.title if metadata else None,
-                "author": metadata.author if metadata else None,
-                "date_published": metadata.date if metadata else None,
-                "url": metadata.url if metadata else url,
-                "domain": metadata.sitename if metadata else None,
-                "description": metadata.description if metadata else None,
-                "categories": metadata.categories if metadata else None,
-                "tags": metadata.tags if metadata else None,
+                "title": getattr(metadata, 'title', None) if metadata else None,
+                "author": getattr(metadata, 'author', None) if metadata else None,
+                "date_published": getattr(metadata, 'date', None) if metadata else None,
+                "url": getattr(metadata, 'url', url) if metadata else url,
+                "domain": getattr(metadata, 'sitename', None) if metadata else None,
+                "description": getattr(metadata, 'description', None) if metadata else None,
+                "categories": getattr(metadata, 'categories', None) if metadata else None,
+                "tags": getattr(metadata, 'tags', None) if metadata else None,
                 "content": html_formatted or text_content,
                 "text_content": text_content,
                 "excerpt": text_content[:200] + "..." if text_content and len(text_content) > 200 else text_content,
                 "word_count": len(text_content.split()) if text_content else 0,
-                "language": metadata.language if metadata else None
+                "language": getattr(metadata, 'language', None) if metadata else None
             }
             
             title_preview = parsed_data.get('title') or 'No title'
