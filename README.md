@@ -15,6 +15,7 @@
 🚀 提供 RESTful API 介面  
 📝 支援 POST 和 GET 兩種請求方式  
 🔍 自動解析 HTML 並提取乾淨的文章內容  
+🔗 **Google URL 解碼器** - 從 Google Alert/RSS 重定向 URL 中提取真實網址  
 ⚡ 快速且易於使用  
 🔗 完整的 n8n 整合支援
 
@@ -94,6 +95,40 @@ curl "http://localhost:3000/api/parse?url=https://www.bbc.com/news/world"
 ```
 http://localhost:3000/api/parse?url=https://example.com/article
 ```
+
+### 5. 解碼 Google URL（新功能！）⭐
+
+**從 Google Alert/RSS 重定向 URL 中提取真實網址**
+
+**POST 請求：**
+```bash
+curl -X POST http://localhost:3000/api/decode-google-url \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.google.com/url?url=https://example.com/article&sa=U"}'
+```
+
+**GET 請求：**
+```bash
+curl "http://localhost:3000/api/decode-google-url?url=https://www.google.com/url?url=https://example.com/article"
+```
+
+**回應範例：**
+```json
+{
+  "success": true,
+  "original_url": "https://www.google.com/url?url=https://example.com/article&sa=U",
+  "decoded_url": "https://example.com/article",
+  "is_google_url": true,
+  "changed": true
+}
+```
+
+**使用場景：**
+- 處理 Google Alert 郵件中的新聞連結
+- 解析 Google RSS Feed 的重定向 URL
+- 在 n8n 工作流程中自動提取真實網址
+
+**詳細文件：** 查看 [GOOGLE_URL_DECODER.md](GOOGLE_URL_DECODER.md)
 
 ## API 回傳格式
 
@@ -243,6 +278,8 @@ ISC
 ### 測試與工具
 - `test-parser.py` - Python 測試腳本
 - `test-parser.js` - JavaScript 測試腳本
+- `test-google-url-decoder.py` - Google URL 解碼器測試（需伺服器）
+- `test-decode-function.py` - 解碼函數測試（獨立運行）⭐
 - `n8n-batch-parser.py` - Python 批次處理工具
 - `n8n-batch-parser.js` - JavaScript 批次處理工具
 - `example-articles.json` - 範例輸入檔案
@@ -255,6 +292,8 @@ ISC
 ### 文件
 - `README.md` - 本檔案（專案總覽）
 - `PYTHON_VS_JAVASCRIPT.md` - 版本比較與選擇指南 ⭐
+- `GOOGLE_URL_DECODER.md` - Google URL 解碼器完整文件 🆕
+- `EXAMPLE_GOOGLE_URL_DECODE.md` - Google URL 解碼器實用範例 🆕
 - `.gitignore` - Git 忽略設定
 
 ---
@@ -268,6 +307,14 @@ ISC
 👉 **[QUICK_START.md](QUICK_START.md)** - 快速上手 n8n 整合  
 👉 **[n8n-integration.md](n8n-integration.md)** - 完整整合指南  
 👉 **[n8n-workflow-example.json](n8n-workflow-example.json)** - 可直接匯入的 workflow
+
+### Google URL 解碼器 🆕
+👉 **[GOOGLE_URL_DECODER.md](GOOGLE_URL_DECODER.md)** - 完整 API 文件與使用說明  
+👉 **[EXAMPLE_GOOGLE_URL_DECODE.md](EXAMPLE_GOOGLE_URL_DECODE.md)** - 實際使用案例與範例
+```bash
+# 快速測試解碼功能
+python3 test-decode-function.py
+```
 
 ### 批次處理
 ```bash

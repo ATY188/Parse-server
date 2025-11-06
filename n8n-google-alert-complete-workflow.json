@@ -1,0 +1,703 @@
+{
+  "name": "Google Alert to Google Sheet Auto Parser",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "from": "googlealerts-noreply@google.com",
+          "subject": "Google 快訊",
+          "labelIds": ["INBOX"],
+          "readStatus": "unread"
+        },
+        "format": "resolved"
+      },
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "auto-generated",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "1",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 從 Gmail 郵件中提取所有新聞網址\nconst items = [];\nconst emailBody = $input.first().json.textPlain || $input.first().json.textHtml || '';\n\n// 取得郵件主旨（包含關鍵字）\nconst subject = $input.first().json.subject || '';\nconst keyword = subject.replace('Google 快訊 - ', '').replace('Google Alert - ', '').trim();\n\nconsole.log('Processing email with subject:', subject);\nconsole.log('Extracted keyword:', keyword);\n\n// 使用正規表達式提取所有網址\n// 排除 Google 的追蹤網址，只保留實際新聞網址\nconst urlPattern = /https?:\\/\\/(?!www\\.google\\.com)(?!google\\.com)[^\\s<>\"]+/g;\nlet urls = emailBody.match(urlPattern) || [];\n\nconsole.log('Found URLs:', urls.length);\n\n// 清理 Google 追蹤連結\nfunction cleanGoogleUrl(url) {\n  if (url.includes('google.com/url')) {\n    const match = url.match(/[?&]q=([^&]+)/);\n    if (match) {\n      return decodeURIComponent(match[1]);\n    }\n  }\n  return url;\n}\n\n// 過濾和清理網址\nconst cleanUrls = urls\n  .map(url => cleanGoogleUrl(url))\n  .filter(url => {\n    // 排除 Google 相關連結\n    if (url.includes('google.com')) return false;\n    if (url.includes('googleusercontent.com')) return false;\n    if (url.includes('gstatic.com')) return false;\n    // 只保留合理長度的網址\n    if (url.length < 20) return false;\n    return true;\n  })\n  .map(url => {\n    // 移除網址結尾的特殊字元\n    return url.replace(/[.,;!?\\)]+$/, '');\n  });\n\nconsole.log('Cleaned URLs:', cleanUrls.length);\n\n// 去重\nconst uniqueUrls = [...new Set(cleanUrls)];\n\nconsole.log('Unique URLs:', uniqueUrls.length);\n\n// 為每個網址建立一個項目\nfor (const url of uniqueUrls) {\n  items.push({\n    json: {\n      url: url,\n      keyword: keyword,\n      source: 'Google Alert',\n      email_date: $input.first().json.date || new Date().toISOString(),\n      status: 'pending',\n      email_id: $input.first().json.id\n    }\n  });\n}\n\nconsole.log('Total items created:', items.length);\n\nif (items.length === 0) {\n  throw new Error('No URLs found in email. Please check the email format.');\n}\n\nreturn items;"
+      },
+      "name": "Extract URLs from Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "News_Queue"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "News_Queue",
+          "mode": "name"
+        },
+        "range": "A:A",
+        "options": {}
+      },
+      "name": "Read Existing URLs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [650, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "2",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 取得已存在的網址列表\nconst existingData = $node[\"Read Existing URLs\"].json;\nconst existingUrls = existingData.map(row => row.url).filter(url => url);\n\nconsole.log('Existing URLs in sheet:', existingUrls.length);\n\n// 過濾掉已存在的網址\nconst newItems = [];\nfor (const item of $input.all()) {\n  const url = item.json.url;\n  if (!existingUrls.includes(url)) {\n    newItems.push(item);\n    console.log('New URL:', url);\n  } else {\n    console.log('Duplicate URL (skipped):', url);\n  }\n}\n\nconsole.log('New URLs to process:', newItems.length);\n\nif (newItems.length === 0) {\n  throw new Error('All URLs already exist in the sheet. No new items to process.');\n}\n\nreturn newItems;"
+      },
+      "name": "Filter Duplicates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "News_Queue",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "url": "={{ $json.url }}",
+            "title": "",
+            "author": "",
+            "content": "",
+            "published_date": "",
+            "summary": "",
+            "keyword": "={{ $json.keyword }}",
+            "source": "={{ $json.source }}",
+            "status": "pending",
+            "processed_time": ""
+          }
+        },
+        "options": {}
+      },
+      "name": "Append to Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1050, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "2",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      },
+      "name": "Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1250, 300],
+      "webhookId": "auto-generated"
+    },
+    {
+      "parameters": {
+        "url": "https://web-production-32568.up.railway.app/api/parse",
+        "authentication": "none",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"url\": \"{{ $json.url }}\"\n}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "Parse Article",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1450, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isEmpty"
+              }
+            },
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Check Parse Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-3.5-turbo",
+        "messages": {
+          "values": [
+            {
+              "content": "=你是一位專業的新聞摘要編輯。請根據以下文章內容，生成一段 150 字以內的繁體中文摘要：\n\n**標題：** {{ $node[\"Parse Article\"].json.data.title }}\n**日期：** {{ $node[\"Parse Article\"].json.data.date_published }}\n**內容：** {{ $node[\"Parse Article\"].json.data.content ? $node[\"Parse Article\"].json.data.content.substring(0, 2000) : $node[\"Parse Article\"].json.data.excerpt }}\n\n摘要要求：\n1. 提取核心重點（Who, What, When, Where, Why, How）\n2. 保持客觀中立，不加入個人觀點\n3. 使用繁體中文\n4. 不超過 150 字\n5. 以單一段落呈現，不使用項目符號\n\n請直接輸出摘要內容，不要包含其他說明文字。"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 300,
+          "temperature": 0.5
+        }
+      },
+      "name": "Generate AI Summary",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1850, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "3",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "url",
+              "value": "={{ $json.url }}",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "title",
+              "value": "={{ $node[\"Parse Article\"].json.data.title || '無法提取標題' }}",
+              "type": "string"
+            },
+            {
+              "id": "3",
+              "name": "author",
+              "value": "={{ $node[\"Parse Article\"].json.data.author || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "4",
+              "name": "content",
+              "value": "={{ $node[\"Parse Article\"].json.data.content || $node[\"Parse Article\"].json.data.excerpt || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "5",
+              "name": "published_date",
+              "value": "={{ $node[\"Parse Article\"].json.data.date_published || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "6",
+              "name": "summary",
+              "value": "={{ $node[\"Generate AI Summary\"].json.choices[0].message.content.trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "7",
+              "name": "keyword",
+              "value": "={{ $node[\"Extract URLs from Email\"].json.keyword }}",
+              "type": "string"
+            },
+            {
+              "id": "8",
+              "name": "source",
+              "value": "Google Alert",
+              "type": "string"
+            },
+            {
+              "id": "9",
+              "name": "status",
+              "value": "completed",
+              "type": "string"
+            },
+            {
+              "id": "10",
+              "name": "processed_time",
+              "value": "={{ $now.format('YYYY-MM-DD HH:mm:ss') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Prepare Update Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [2050, 200]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "News_Queue",
+          "mode": "name"
+        },
+        "range": "A:J",
+        "options": {}
+      },
+      "name": "Read Google Sheet All",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2250, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "2",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 讀取整個 Sheet，找到對應 URL 的行號\nconst sheetData = $node[\"Read Google Sheet All\"].json;\nconst targetUrl = $json.url;\n\nconsole.log('Looking for URL:', targetUrl);\n\nlet rowNumber = -1;\nfor (let i = 0; i < sheetData.length; i++) {\n  if (sheetData[i].url === targetUrl) {\n    rowNumber = i + 2; // +2 因為：+1 是標題行，+1 是轉換為 1-based index\n    console.log('Found at row:', rowNumber);\n    break;\n  }\n}\n\nif (rowNumber === -1) {\n  throw new Error('URL not found in sheet: ' + targetUrl);\n}\n\nreturn [{\n  json: {\n    ...$json,\n    row_number: rowNumber\n  }\n}];"
+      },
+      "name": "Find Row Number",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2450, 200]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "News_Queue",
+          "mode": "name"
+        },
+        "range": "=B{{ $json.row_number }}:J{{ $json.row_number }}",
+        "options": {
+          "valueInputMode": "USER_ENTERED"
+        },
+        "dataMode": "manual",
+        "data": {
+          "values": [
+            {
+              "row": [
+                "={{ $json.title }}",
+                "={{ $json.author }}",
+                "={{ $json.content.length > 1000 ? $json.content.substring(0, 1000) + '...' : $json.content }}",
+                "={{ $json.published_date }}",
+                "={{ $json.summary }}",
+                "={{ $json.keyword }}",
+                "={{ $json.source }}",
+                "={{ $json.status }}",
+                "={{ $json.processed_time }}"
+              ]
+            }
+          ]
+        }
+      },
+      "name": "Update Google Sheet Success",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2650, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "2",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 當解析失敗時，記錄錯誤\nconst errorMessage = $json.error || $json.message || 'Unknown error';\n\nconsole.log('Parse failed for URL:', $node[\"Extract URLs from Email\"].json.url);\nconsole.log('Error:', errorMessage);\n\nreturn [{\n  json: {\n    url: $node[\"Extract URLs from Email\"].json.url,\n    keyword: $node[\"Extract URLs from Email\"].json.keyword,\n    source: $node[\"Extract URLs from Email\"].json.source,\n    status: 'failed',\n    error_message: errorMessage,\n    processed_time: $now.format('YYYY-MM-DD HH:mm:ss')\n  }\n}];"
+      },
+      "name": "Prepare Failed Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 400]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "News_Queue",
+          "mode": "name"
+        },
+        "range": "A:J",
+        "options": {}
+      },
+      "name": "Read Google Sheet All Failed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2050, 400],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "2",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 找到失敗項目的行號\nconst sheetData = $node[\"Read Google Sheet All Failed\"].json;\nconst targetUrl = $json.url;\n\nlet rowNumber = -1;\nfor (let i = 0; i < sheetData.length; i++) {\n  if (sheetData[i].url === targetUrl) {\n    rowNumber = i + 2;\n    break;\n  }\n}\n\nif (rowNumber === -1) {\n  throw new Error('URL not found in sheet: ' + targetUrl);\n}\n\nreturn [{\n  json: {\n    ...$json,\n    row_number: rowNumber\n  }\n}];"
+      },
+      "name": "Find Row Number Failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 400]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "News_Queue",
+          "mode": "name"
+        },
+        "range": "=I{{ $json.row_number }}:J{{ $json.row_number }}",
+        "options": {
+          "valueInputMode": "USER_ENTERED"
+        },
+        "dataMode": "manual",
+        "data": {
+          "values": [
+            {
+              "row": [
+                "failed",
+                "={{ $json.processed_time }}"
+              ]
+            }
+          ]
+        }
+      },
+      "name": "Update Google Sheet Failed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2450, 400],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "2",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "News_Queue",
+          "mode": "name"
+        },
+        "messageId": "={{ $node[\"Gmail Trigger\"].json.id }}",
+        "labelIds": ["UNREAD"],
+        "options": {}
+      },
+      "name": "Mark Email as Read",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2850, 300],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "1",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract URLs from Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract URLs from Email": {
+      "main": [
+        [
+          {
+            "node": "Read Existing URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Existing URLs": {
+      "main": [
+        [
+          {
+            "node": "Filter Duplicates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Duplicates": {
+      "main": [
+        [
+          {
+            "node": "Append to Google Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append to Google Sheet": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Parse Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Article": {
+      "main": [
+        [
+          {
+            "node": "Check Parse Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Parse Success": {
+      "main": [
+        [
+          {
+            "node": "Generate AI Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Failed Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate AI Summary": {
+      "main": [
+        [
+          {
+            "node": "Prepare Update Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Update Data": {
+      "main": [
+        [
+          {
+            "node": "Read Google Sheet All",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Google Sheet All": {
+      "main": [
+        [
+          {
+            "node": "Find Row Number",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Row Number": {
+      "main": [
+        [
+          {
+            "node": "Update Google Sheet Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Google Sheet Success": {
+      "main": [
+        [
+          {
+            "node": "Mark Email as Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Failed Data": {
+      "main": [
+        [
+          {
+            "node": "Read Google Sheet All Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Google Sheet All Failed": {
+      "main": [
+        [
+          {
+            "node": "Find Row Number Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Row Number Failed": {
+      "main": [
+        [
+          {
+            "node": "Update Google Sheet Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Google Sheet Failed": {
+      "main": [
+        [
+          {
+            "node": "Mark Email as Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-11-02T00:00:00.000Z",
+  "versionId": "1"
+}
+

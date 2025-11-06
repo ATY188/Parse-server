@@ -1,0 +1,358 @@
+{
+  "name": "Google Sheet News Parser with AI Summary",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "News_Queue",
+          "mode": "name"
+        },
+        "range": "A2:H",
+        "options": {
+          "returnAllMatches": true
+        }
+      },
+      "name": "Read Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.status }}",
+              "operation": "equals",
+              "value2": "pending"
+            }
+          ]
+        }
+      },
+      "name": "Filter Pending",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://web-production-32568.up.railway.app/api/parse",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $json.url }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "Parse Article",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.error }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Check Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "complete",
+        "model": "gpt-3.5-turbo",
+        "prompt": "=請根據以下文章內容，生成一段 150 字以內的中文摘要：\n\n標題：{{ $json.title }}\n作者：{{ $json.author }}\n內容：{{ $json.content.substring(0, 1000) }}\n\n摘要要求：\n1. 提取核心重點\n2. 保持客觀中立\n3. 使用繁體中文\n4. 不超過 150 字",
+        "options": {
+          "maxTokens": 300,
+          "temperature": 0.7
+        }
+      },
+      "name": "Generate AI Summary",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1250, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "name": "url",
+              "value": "={{ $json.url }}",
+              "type": "string"
+            },
+            {
+              "name": "title",
+              "value": "={{ $node['Parse Article'].json.title }}",
+              "type": "string"
+            },
+            {
+              "name": "author",
+              "value": "={{ $node['Parse Article'].json.author }}",
+              "type": "string"
+            },
+            {
+              "name": "content",
+              "value": "={{ $node['Parse Article'].json.content }}",
+              "type": "string"
+            },
+            {
+              "name": "published_date",
+              "value": "={{ $node['Parse Article'].json.date_published }}",
+              "type": "string"
+            },
+            {
+              "name": "summary",
+              "value": "={{ $node['Generate AI Summary'].json.choices[0].message.content }}",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "value": "completed",
+              "type": "string"
+            },
+            {
+              "name": "processed_time",
+              "value": "={{ $now.format('YYYY-MM-DD HH:mm:ss') }}",
+              "type": "string"
+            },
+            {
+              "name": "row_number",
+              "value": "={{ $json.row_number }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Prepare Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1450, 200]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "News_Queue",
+          "mode": "name"
+        },
+        "range": "=B{{ $json.row_number }}:H{{ $json.row_number }}",
+        "options": {
+          "valueInputMode": "USER_ENTERED"
+        },
+        "dataMode": "manual",
+        "valueInputMode": "manual",
+        "values": {
+          "values": [
+            {
+              "row": [
+                "={{ $json.title }}",
+                "={{ $json.author }}",
+                "={{ $json.content.substring(0, 500) }}...",
+                "={{ $json.published_date }}",
+                "={{ $json.summary }}",
+                "={{ $json.status }}",
+                "={{ $json.processed_time }}"
+              ]
+            }
+          ]
+        }
+      },
+      "name": "Update Google Sheet Success",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1650, 200]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "News_Queue",
+          "mode": "name"
+        },
+        "range": "=G{{ $json.row_number }}:H{{ $json.row_number }}",
+        "dataMode": "manual",
+        "values": {
+          "values": [
+            {
+              "row": [
+                "failed",
+                "={{ $now.format('YYYY-MM-DD HH:mm:ss') }}"
+              ]
+            }
+          ]
+        }
+      },
+      "name": "Update Google Sheet Failed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1450, 400]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Google Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Google Sheet": {
+      "main": [
+        [
+          {
+            "node": "Filter Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Pending": {
+      "main": [
+        [
+          {
+            "node": "Parse Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Article": {
+      "main": [
+        [
+          {
+            "node": "Check Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Error": {
+      "main": [
+        [
+          {
+            "node": "Generate AI Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Google Sheet Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate AI Summary": {
+      "main": [
+        [
+          {
+            "node": "Prepare Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Data": {
+      "main": [
+        [
+          {
+            "node": "Update Google Sheet Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
+
+

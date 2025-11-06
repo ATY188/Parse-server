@@ -379,3 +379,5 @@ app.listen(PORT, () => {
   console.log(`   ✓ 隨機 User-Agent`);
   console.log(`   ✓ 批次速率控制`);
 });
+
+EOF

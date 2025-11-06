@@ -1,0 +1,153 @@
+{
+  "name": "Google Alert - 收集與處理",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyHour"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "from": "googlealerts-noreply@google.com",
+          "subject": "Google 快訊",
+          "labelIds": ["INBOX"],
+          "readStatus": "unread"
+        },
+        "format": "resolved"
+      },
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "notes": "監控來自 Google Alerts 的未讀郵件"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 從 Gmail 郵件中提取真實新聞網址\nconst items = [];\nconst emailData = $input.first().json;\n\n// 取得郵件內容（優先使用 HTML，再用純文字）\nconst emailHtml = emailData.html || emailData.textHtml || '';\nconst emailText = emailData.textPlain || '';\nconst emailBody = emailHtml + ' ' + emailText;\n\n// 取得郵件主旨（包含關鍵字）\nconst subject = emailData.subject || '';\nconst keyword = subject.replace('Google 快訊 - ', '').replace('Google Alert - ', '').trim();\n\n// 取得郵件時間\nconst emailDate = emailData.date || new Date().toISOString();\n\nconsole.log('=== 開始處理 Google Alert 郵件 ===');\nconsole.log('主旨:', subject);\nconsole.log('關鍵字:', keyword);\nconsole.log('時間:', emailDate);\n\n// 方法 1: 提取所有 HTTP/HTTPS 連結\nconst urlPattern = /https?:\\/\\/[^\\s<>\"'\\)\\]]+/gi;\nlet urls = emailBody.match(urlPattern) || [];\n\nconsole.log(`找到 ${urls.length} 個連結`);\n\n// 清理和過濾網址\nconst cleanUrls = urls\n  .map(url => {\n    // 移除結尾的特殊字元和 HTML 標籤殘留\n    return url.replace(/[.,;!?\\)\\]>\"']+$/, '');\n  })\n  .filter(url => {\n    // 排除 Google 相關連結\n    if (url.includes('google.com')) return false;\n    if (url.includes('googleusercontent.com')) return false;\n    if (url.includes('gstatic.com')) return false;\n    if (url.includes('doubleclick.net')) return false;\n    \n    // 排除圖片和其他媒體檔案\n    if (url.match(/\\.(jpg|jpeg|png|gif|svg|webp|mp4|mp3|pdf)$/i)) return false;\n    \n    // 排除社群媒體追蹤連結\n    if (url.includes('facebook.com/tr')) return false;\n    if (url.includes('twitter.com/i/')) return false;\n    \n    // 最小長度檢查（避免短網址片段）\n    if (url.length < 30) return false;\n    \n    // 必須包含至少一個斜線（確保是完整 URL）\n    if (!url.includes('/')) return false;\n    \n    return true;\n  });\n\nconsole.log(`過濾後剩餘 ${cleanUrls.length} 個有效連結`);\n\n// 去重\nconst uniqueUrls = [...new Set(cleanUrls)];\nconsole.log(`去重後剩餘 ${uniqueUrls.length} 個唯一連結`);\n\nif (uniqueUrls.length === 0) {\n  console.error('警告: 未找到任何有效的新聞連結');\n  console.log('郵件內容預覽:', emailBody.substring(0, 500));\n  \n  // 不拋出錯誤，而是返回空陣列（讓 workflow 繼續但不處理）\n  return [];\n}\n\n// 為每個網址建立一個項目\nfor (const url of uniqueUrls) {\n  console.log(`✓ 新增: ${url.substring(0, 80)}...`);\n  \n  items.push({\n    json: {\n      url: url,\n      keyword: keyword,\n      title: '', // 將由 Parser API 填入\n      source_name: 'Google Alert',\n      publicdate: emailDate\n    }\n  });\n}\n\nconsole.log(`\\n成功建立 ${items.length} 個待處理項目`);\n\nreturn items;"
+      },
+      "name": "Extract URLs from Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300],
+      "notes": "從郵件中提取真實新聞網址，過濾掉 Google 追蹤連結"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "17vbNRbZGXvvsAVmBK7JuvB0kTZtwg3jFOIW9Opss2lk",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Google_Alerts (in)",
+          "mode": "name"
+        },
+        "range": "A:A",
+        "options": {}
+      },
+      "name": "Read Google Alerts Output",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [690, 300],
+      "notes": "讀取已存在的 URL 進行去重檢查"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 取得已存在的網址列表\nconst existingRows = $node[\"Read Google Alerts Output\"].json;\n\n// 提取所有已存在的 URL（假設在 A 欄）\nconst existingUrls = new Set(\n  existingRows\n    .map(row => row.url || row.A || row['欄位1'])\n    .filter(url => url && url.trim().length > 0)\n);\n\nconsole.log('=== 去重檢查 ===');\nconsole.log(`表格中已有 ${existingUrls.size} 個 URL`);\n\n// 過濾掉已存在的網址\nconst newItems = [];\nlet duplicateCount = 0;\n\nfor (const item of $input.all()) {\n  const url = item.json.url;\n  \n  if (!existingUrls.has(url)) {\n    newItems.push(item);\n    console.log(`✓ 新 URL: ${url.substring(0, 70)}...`);\n  } else {\n    duplicateCount++;\n    console.log(`✗ 重複 URL (跳過): ${url.substring(0, 70)}...`);\n  }\n}\n\nconsole.log(`\\n結果: ${newItems.length} 個新 URL, ${duplicateCount} 個重複`);\n\nif (newItems.length === 0) {\n  console.log('所有 URL 都已存在，workflow 結束');\n  return [];\n}\n\nreturn newItems;"
+      },
+      "name": "Filter Duplicates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 300],
+      "continueOnFail": true,
+      "notes": "過濾掉已存在的 URL"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "17vbNRbZGXvvsAVmBK7JuvB0kTZtwg3jFOIW9Opss2lk",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Google_Alerts (in)",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "url": "={{ $json.url }}",
+            "keyword": "={{ $json.keyword }}",
+            "title": "",
+            "source_name": "={{ $json.source_name }}",
+            "publicdate": "={{ $json.publicdate }}"
+          }
+        },
+        "options": {}
+      },
+      "name": "Append to Google Alerts",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1130, 300],
+      "notes": "將新 URL 寫入 Google Alerts 工作表"
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract URLs from Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract URLs from Email": {
+      "main": [
+        [
+          {
+            "node": "Read Google Alerts Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Google Alerts Output": {
+      "main": [
+        [
+          {
+            "node": "Filter Duplicates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Duplicates": {
+      "main": [
+        [
+          {
+            "node": "Append to Google Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
+

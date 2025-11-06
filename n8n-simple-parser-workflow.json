@@ -1,0 +1,235 @@
+{
+  "name": "Simple Article Parser",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Articles",
+          "mode": "name"
+        },
+        "range": "A2:G",
+        "options": {}
+      },
+      "name": "Google Sheets Read",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.status }}",
+              "operation": "equals",
+              "value2": "pending"
+            }
+          ]
+        }
+      },
+      "name": "Filter Pending",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://web-production-32568.up.railway.app/api/parse",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"url\": \"{{ $json.article_url }}\"\n}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "Parser API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "model": "gpt-3.5-turbo",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "你是一個專業的新聞摘要助手，擅長提取重點並用繁體中文撰寫簡潔的摘要。"
+            },
+            {
+              "role": "user",
+              "content": "=請根據以下文章內容，生成 150 字以內的繁體中文摘要：\n\n標題：{{ $('Parser API').item.json.data.title }}\n作者：{{ $('Parser API').item.json.data.author }}\n內容：{{ $('Parser API').item.json.data.text_content }}\n\n摘要要求：\n1. 提取核心重點（5W1H）\n2. 保持客觀中立\n3. 使用繁體中文\n4. 不超過 150 字"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 300
+        }
+      },
+      "name": "OpenAI Summary",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1050, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 取得各節點的資料\nconst parserData = $('Parser API').item.json.data;\nconst aiSummary = $json.choices[0].message.content;\nconst originalData = $('Filter Pending').item.json;\n\n// 計算這是第幾行\nconst rowNumber = $('Google Sheets Read').itemIndex + 2;\n\nreturn {\n  row_number: rowNumber,\n  article_url: originalData.article_url,\n  title: parserData.title || '',\n  author: parserData.author || '',\n  content: parserData.text_content ? parserData.text_content.substring(0, 500) + '...' : '',\n  summary: aiSummary || '',\n  status: 'completed',\n  processed_time: new Date().toISOString().replace('T', ' ').substring(0, 19)\n};"
+      },
+      "name": "Prepare Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Articles",
+          "mode": "name"
+        },
+        "range": "=B{{ $json.row_number }}:G{{ $json.row_number }}",
+        "options": {
+          "valueInputMode": "USER_ENTERED"
+        },
+        "dataMode": "manual",
+        "valueInputMode": "manual",
+        "values": {
+          "values": [
+            {
+              "row": [
+                "={{ $json.title }}",
+                "={{ $json.author }}",
+                "={{ $json.content }}",
+                "={{ $json.summary }}",
+                "={{ $json.status }}",
+                "={{ $json.processed_time }}"
+              ]
+            }
+          ]
+        }
+      },
+      "name": "Google Sheets Update",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1450, 300]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets Read": {
+      "main": [
+        [
+          {
+            "node": "Filter Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Pending": {
+      "main": [
+        [
+          {
+            "node": "Parser API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser API": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Summary": {
+      "main": [
+        [
+          {
+            "node": "Prepare Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Data": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
+
+

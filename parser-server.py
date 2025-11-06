@@ -101,6 +101,15 @@ class ParseWebhookRequest(BaseModel):
             raise ValueError('URL 必須以 http:// 或 https:// 開頭')
         return v
 
+class DecodeGoogleUrlRequest(BaseModel):
+    url: str
+    
+    @validator('url')
+    def validate_url(cls, v):
+        if not v.startswith(('http://', 'https://')):
+            raise ValueError('URL 必須以 http:// 或 https:// 開頭')
+        return v
+
 
 async def fetch_with_playwright(
     url: str, 
@@ -359,6 +368,55 @@ async def fetch_and_parse_with_playwright(
         )
 
 
+def decode_google_url(google_url: str) -> Optional[str]:
+    """
+    從 Google 重定向 URL 中提取真實的目標 URL
+    
+    支援的格式：
+    - Google News/Alerts: https://www.google.com/url?url=...
+    - Google RSS: https://news.google.com/rss/articles/...
+    
+    Args:
+        google_url: Google 重定向 URL
+        
+    Returns:
+        真實的目標 URL，如果解析失敗則返回 None
+        
+    Examples:
+        >>> decode_google_url('https://www.google.com/url?url=https://example.com&...')
+        'https://example.com'
+    """
+    from urllib.parse import urlparse, parse_qs, unquote
+    
+    try:
+        # 解析 URL
+        parsed = urlparse(google_url)
+        
+        # 檢查是否為 Google URL
+        if 'google.com' not in parsed.netloc:
+            # 不是 Google URL，直接返回原 URL
+            return google_url
+        
+        # 解析查詢參數
+        query_params = parse_qs(parsed.query)
+        
+        # 嘗試從不同的參數中提取 URL
+        # 常見參數：url, q, u
+        for param in ['url', 'q', 'u']:
+            if param in query_params and query_params[param]:
+                decoded_url = unquote(query_params[param][0])
+                # 確保是完整的 URL
+                if decoded_url.startswith(('http://', 'https://')):
+                    return decoded_url
+        
+        # 如果沒有找到，返回原 URL
+        return google_url
+        
+    except Exception as e:
+        # 解析失敗，返回原 URL
+        return google_url
+
+
 # 首頁路由
 @app.get("/")
 async def root():
@@ -417,6 +475,19 @@ async def root():
                 },
                 "description": "解析網頁並回調 webhook（適用於 n8n 整合）"
             },
+            "decodeGoogleUrl": {
+                "method": "POST",
+                "path": "/api/decode-google-url",
+                "body": {
+                    "url": "Google 重定向 URL（例如：https://www.google.com/url?url=...）"
+                },
+                "description": "從 Google 重定向 URL 中提取真實的目標 URL ⭐ 適用於 Google Alert/RSS"
+            },
+            "decodeGoogleUrlGet": {
+                "method": "GET",
+                "path": "/api/decode-google-url?url=YOUR_GOOGLE_URL",
+                "description": "使用 GET 方法解碼 Google URL"
+            },
             "docs": {
                 "method": "GET",
                 "path": "/docs",
@@ -426,7 +497,9 @@ async def root():
         "examples": [
             'POST /api/parse with body: {"url": "https://example.com/article", "max_retries": 3}',
             'GET /api/parse?url=https://example.com/article',
-            'POST /api/parse-webhook with body: {"url": "https://example.com/article", "webhook_url": "https://your-n8n.com/webhook/..."}'
+            'POST /api/parse-webhook with body: {"url": "https://example.com/article", "webhook_url": "https://your-n8n.com/webhook/..."}',
+            'POST /api/decode-google-url with body: {"url": "https://www.google.com/url?url=https://example.com/article&..."}',
+            'GET /api/decode-google-url?url=https://www.google.com/url?url=https://example.com/article'
         ],
         "errorHandling": {
             "403 Forbidden": "自動重試 + 隨機 User-Agent + Referer header",
@@ -839,6 +912,106 @@ async def parse_url_webhook(request: ParseWebhookRequest, background_tasks: Back
         "webhook_url": request.webhook_url,
         "max_retries": request.max_retries
     }
+
+
+@app.post("/api/decode-google-url")
+async def decode_google_url_post(request: DecodeGoogleUrlRequest):
+    """
+    POST 方法：從 Google 重定向 URL 中提取真實的目標 URL
+    
+    支援的格式：
+    - Google News/Alerts: https://www.google.com/url?url=...
+    - Google RSS: https://news.google.com/rss/articles/...
+    
+    Args:
+        request: 包含 url 的請求物件
+        
+    Returns:
+        包含原始 URL 和解碼後 URL 的 JSON 回應
+        
+    Example:
+        POST /api/decode-google-url
+        {
+            "url": "https://www.google.com/url?url=https://example.com/article&..."
+        }
+        
+        Response:
+        {
+            "success": true,
+            "original_url": "https://www.google.com/url?url=...",
+            "decoded_url": "https://example.com/article",
+            "is_google_url": true
+        }
+    """
+    try:
+        original_url = request.url
+        decoded_url = decode_google_url(original_url)
+        
+        # 檢查是否為 Google URL
+        is_google_url = 'google.com' in original_url
+        
+        return {
+            "success": True,
+            "original_url": original_url,
+            "decoded_url": decoded_url,
+            "is_google_url": is_google_url,
+            "changed": original_url != decoded_url
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"解碼 URL 時發生錯誤: {str(e)}"
+        )
+
+
+@app.get("/api/decode-google-url")
+async def decode_google_url_get(url: str):
+    """
+    GET 方法：從 Google 重定向 URL 中提取真實的目標 URL
+    
+    Args:
+        url: Google 重定向 URL（作為查詢參數）
+        
+    Returns:
+        包含原始 URL 和解碼後 URL 的 JSON 回應
+        
+    Example:
+        GET /api/decode-google-url?url=https://www.google.com/url?url=https://example.com/article
+        
+        Response:
+        {
+            "success": true,
+            "original_url": "https://www.google.com/url?url=...",
+            "decoded_url": "https://example.com/article",
+            "is_google_url": true
+        }
+    """
+    if not url:
+        raise HTTPException(
+            status_code=400,
+            detail="請提供 URL 參數"
+        )
+    
+    try:
+        decoded_url = decode_google_url(url)
+        
+        # 檢查是否為 Google URL
+        is_google_url = 'google.com' in url
+        
+        return {
+            "success": True,
+            "original_url": url,
+            "decoded_url": decoded_url,
+            "is_google_url": is_google_url,
+            "changed": url != decoded_url
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"解碼 URL 時發生錯誤: {str(e)}"
+        )
 
 
 @app.get("/health")
