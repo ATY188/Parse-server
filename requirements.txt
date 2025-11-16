@@ -1,26 +1,19 @@
 # Python 網頁內容解析器 API 所需套件
+# 不指定具體版本，讓 pip 自動選擇兼容版本
 
 # Web 框架
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
+fastapi
+uvicorn[standard]
 
 # HTTP 客戶端
-httpx==0.26.0
+httpx
 
 # 網頁內容解析
-trafilatura==1.7.0
+trafilatura
 
 # 瀏覽器自動化（用於動態網站）
-playwright==1.40.0
+playwright
 
 # 資料驗證
-pydantic==2.5.3
-
-# 選用：如果想使用 newspaper3k（另一個解析工具）
-# newspaper3k==0.2.8
-# lxml==5.1.0
-# Pillow==10.2.0
-
-# 選用：如果想使用 readability（類似 @postlight/parser）
-# readability-lxml==0.8.1
+pydantic
 

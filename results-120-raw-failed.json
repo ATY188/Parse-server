@@ -1,0 +1,23 @@
+[
+  {
+    "url": "https://www.reuters.com/world/africa/us-futures-drop-fading-december-rate-cut-expectations-2025-11-14/",
+    "id": "016",
+    "success": false,
+    "error": "解析失敗",
+    "failed_at": "2025-11-15T21:57:50.288276"
+  },
+  {
+    "url": "https://www.usnews.com/news/business/articles/2025-11-14/asian-shares-fall-tracking-wall-streets-tumble-on-worries-about-ai-stocks-and-interest-rates",
+    "id": "024",
+    "success": false,
+    "error": "",
+    "failed_at": "2025-11-15T22:01:03.485289"
+  },
+  {
+    "url": "https://www.techbuzz.ai/articles/tech-layoffs-surge-through-2025-as-industry-faces-reality-check",
+    "id": "028",
+    "success": false,
+    "error": "",
+    "failed_at": "2025-11-15T22:03:38.563655"
+  }
+]
