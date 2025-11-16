@@ -13,6 +13,7 @@ uvicorn parser-server:app --reload --port 3000
 """
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl, validator
 from typing import Optional, Dict, Any
@@ -29,7 +30,17 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 app = FastAPI(
     title="網頁內容解析器 API（增強版 + 智慧路由）",
     description="使用 trafilatura 自動提取網頁文章內容，支援重試和錯誤處理，智慧路由優化",
-    version="1.5.0"
+    version="1.6.0"
+)
+
+# ==================== CORS 配置 ====================
+# 允許所有來源訪問 API（適用於公開 API）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 允許所有來源
+    allow_credentials=True,
+    allow_methods=["*"],  # 允許所有 HTTP 方法 (GET, POST, PUT, DELETE, HEAD, OPTIONS)
+    allow_headers=["*"],  # 允許所有 headers
 )
 
 # ==================== 智慧路由配置 ====================
@@ -549,12 +560,13 @@ def decode_google_url(google_url: str) -> Optional[str]:
 
 # 首頁路由
 @app.get("/")
+@app.head("/")  # 支持 HEAD 請求（用於健康檢查）
 async def root():
     """API 首頁 - 顯示可用端點"""
     return {
         "message": "歡迎使用網頁內容解析器 API (Python 增強版 + 智慧路由)",
         "framework": "FastAPI + trafilatura + Playwright",
-        "version": "1.5.0",
+        "version": "1.6.0",
         "features": [
             "🧠 智慧路由（根據域名自動選擇最佳解析方式）",
             "⛔ 黑名單機制（跳過已知無法解析的網站，節省時間）",
@@ -1237,13 +1249,14 @@ async def decode_google_url_get(url: str):
 
 
 @app.get("/health")
+@app.head("/health")  # 支持 HEAD 請求
 async def health_check():
     """健康檢查端點"""
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "service": "parser-api",
-        "version": "1.4.0",
+        "version": "1.6.0",
         "features": [
             "retry-mechanism",
             "enhanced-headers",
@@ -1261,7 +1274,7 @@ if __name__ == "__main__":
     # 從環境變數讀取埠號（Railway 會提供），預設 3000
     port = int(os.getenv("PORT", 3000))
     
-    print("🚀 Parser 伺服器已啟動！（Python 增強版 v1.2.0）")
+    print("🚀 Parser 伺服器已啟動！（Python 增強版 v1.6.0）")
     print(f"📡 監聽埠號: {port}")
     print(f"🌐 本地訪問: http://localhost:{port}")
     print(f"📚 API 文件: http://localhost:{port}/docs")
