@@ -49,12 +49,14 @@ async def parse_article(
     Returns:
         解析結果
     """
+    start_time = datetime.now()
     try:
         response = await client.post(
             API_URL,
             json={'url': article_data['url']},
             timeout=30.0
         )
+        elapsed_time = (datetime.now() - start_time).total_seconds()
         
         if response.status_code != 200:
             raise Exception(f"HTTP {response.status_code}: {response.text}")
@@ -66,12 +68,18 @@ async def parse_article(
                 **article_data,
                 'success': True,
                 'parsed_data': result['data'],
+                'elapsed_time': elapsed_time,
+                'status_code': response.status_code,
+                'routing_decision': result.get('routing_decision'),
+                'rendering_method': result.get('data', {}).get('rendering_method'),
+                'attempts': result.get('attempts', 1),
                 'parsed_at': datetime.now().isoformat()
             }
         else:
             raise Exception('解析失敗')
             
     except Exception as e:
+        elapsed_time = (datetime.now() - start_time).total_seconds()
         print(f"❌ 解析失敗 (第 {retry_count + 1} 次): {article_data['url']}")
         print(f"   錯誤: {str(e)}")
         
@@ -85,6 +93,8 @@ async def parse_article(
             **article_data,
             'success': False,
             'error': str(e),
+            'elapsed_time': elapsed_time,
+            'status_code': getattr(response, 'status_code', None) if 'response' in locals() else None,
             'failed_at': datetime.now().isoformat()
         }
 
@@ -134,9 +144,12 @@ async def batch_parse(input_file: str, output_file: str):
                     title = parsed_data.get('title', '無標題')
                     word_count = parsed_data.get('word_count', 0)
                     author = parsed_data.get('author', '未知')
+                    elapsed = result.get('elapsed_time', 0)
+                    method = result.get('rendering_method', 'static')
+                    method_display = '動態' if method == 'playwright' else '靜態'
                     
                     print(f"{progress} ✅ 成功: {title}")
-                    print(f"{progress}    字數: {word_count}, 作者: {author}")
+                    print(f"{progress}    字數: {word_count}, 作者: {author}, 耗時: {elapsed:.2f}秒 ({method_display})")
                 else:
                     fail_count += 1
                     print(f"{progress} ❌ 失敗")

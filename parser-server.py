@@ -36,11 +36,11 @@ app = FastAPI(
 
 # 已知無法解析的網站（黑名單）- 直接返回失敗，建議使用 RSS
 BLOCKED_DOMAINS = [
-    'reuters.com',           # 401 Forbidden - 需要訂閱
-    'japantimes.co.jp',      # Cloudflare 人類驗證
-    'koin.com',              # 403 Forbidden - 強反爬
+    'reuters.com',           # 401 Forbidden - 需要訂閱（paywall）
+    'japantimes.co.jp',      # Cloudflare 人類驗證（CAPTCHA）
     'content-technology.com', # 403 Forbidden - 強反爬
     'isna.ir',               # 地區封鎖（伊朗）
+    # 'koin.com',            # 已移除：給 Playwright 一次機會
 ]
 
 # 已知必須使用動態渲染的網站（直接用 Playwright，不浪費時間試靜態）
@@ -325,9 +325,9 @@ async def fetch_with_playwright(
                     });
                 """)
             
-            # 訪問網頁
+            # 訪問網頁（使用更寬鬆的策略以提升穩定性）
             print(f"[Playwright] 正在訪問: {url}")
-            await page.goto(url, wait_until='networkidle', timeout=60000)  # 增加到 60 秒
+            await page.goto(url, wait_until='domcontentloaded', timeout=90000)  # 90 秒，使用 domcontentloaded 策略
             
             # 隨機延遲（模擬人類行為）
             delay = random.uniform(1, 2.5)
@@ -360,27 +360,20 @@ async def fetch_with_playwright(
                 except:
                     print(f"[Playwright] 警告：元素 {wait_for} 未找到，繼續提取內容")
             
-            # 滾動頁面以觸發懶加載
+            # 滾動頁面以觸發懶加載（優化版：快速分段滾動）
             print(f"[Playwright] 滾動頁面以載入動態內容...")
-            await page.evaluate("""async () => {
-                await new Promise((resolve) => {
-                    let totalHeight = 0;
-                    const distance = 100;
-                    const timer = setInterval(() => {
-                        const scrollHeight = document.body.scrollHeight;
-                        window.scrollBy(0, distance);
-                        totalHeight += distance;
-                        
-                        if(totalHeight >= scrollHeight){
-                            clearInterval(timer);
-                            resolve();
-                        }
-                    }, 100);
+            await page.evaluate("""() => {
+                // 快速分段滾動到頁面不同位置
+                const positions = [0.3, 0.6, 1.0];  // 30%, 60%, 100%
+                positions.forEach((ratio, index) => {
+                    setTimeout(() => {
+                        window.scrollTo(0, document.body.scrollHeight * ratio);
+                    }, index * 400);  // 每 400ms 滾動一次
                 });
             }""")
             
-            # 再等待一下，確保內容載入完成
-            await asyncio.sleep(1)
+            # 再等待一下，確保內容載入完成（給懶加載更多時間）
+            await asyncio.sleep(2)
             
             # 獲取渲染後的 HTML
             html_content = await page.content()
@@ -401,85 +394,108 @@ async def fetch_and_parse_with_playwright(
     url: str,
     wait_for: Optional[str] = None,
     block_ads: bool = True,
-    stealth_mode: bool = True
+    stealth_mode: bool = True,
+    max_retries: int = 2
 ) -> Dict[str, Any]:
     """
-    使用 Playwright 下載並解析動態網頁內容（增強版）
+    使用 Playwright 下載並解析動態網頁內容（增強版 + 重試機制）
     
     Args:
         url: 要解析的網頁 URL
         wait_for: 等待特定元素出現
         block_ads: 是否屏蔽廣告
         stealth_mode: 是否啟用反爬蟲模式
+        max_retries: 最大重試次數（預設 2 次）
         
     Returns:
         解析後的資料字典
     """
-    try:
-        # 使用 Playwright 獲取渲染後的 HTML
-        html_content = await fetch_with_playwright(url, wait_for, block_ads, stealth_mode)
-        
-        # 使用 trafilatura 解析內容
+    last_error = None
+    
+    for attempt in range(1, max_retries + 1):
         try:
-            text_content = trafilatura.extract(
-                html_content,
-                include_comments=False,
-                include_tables=True,
-                no_fallback=False
-            )
+            if attempt > 1:
+                print(f"[Playwright] 重試 {attempt}/{max_retries}")
+                await asyncio.sleep(3)  # 等待 3 秒後重試
+            
+            # 使用 Playwright 獲取渲染後的 HTML
+            html_content = await fetch_with_playwright(url, wait_for, block_ads, stealth_mode)
+            
+            # 使用 trafilatura 解析內容
+            try:
+                text_content = trafilatura.extract(
+                    html_content,
+                    include_comments=False,
+                    include_tables=True,
+                    no_fallback=False
+                )
+            except Exception as e:
+                print(f"[警告] trafilatura.extract 失敗: {e}")
+                text_content = None
+            
+            # 提取元數據
+            try:
+                metadata = trafilatura.extract_metadata(html_content)
+            except Exception as e:
+                print(f"[警告] trafilatura.extract_metadata 失敗: {e}")
+                metadata = None
+            
+            # 提取 XML 格式內容
+            try:
+                html_formatted = trafilatura.extract(
+                    html_content,
+                    include_comments=False,
+                    include_tables=True,
+                    no_fallback=False,
+                    output_format='xml'
+                )
+            except Exception as e:
+                print(f"[警告] trafilatura.extract (XML) 失敗: {e}")
+                html_formatted = None
+            
+            # 整理回傳資料
+            parsed_data = {
+                "title": getattr(metadata, 'title', None) if metadata else None,
+                "author": getattr(metadata, 'author', None) if metadata else None,
+                "date_published": getattr(metadata, 'date', None) if metadata else None,
+                "url": getattr(metadata, 'url', url) if metadata else url,
+                "domain": getattr(metadata, 'sitename', None) if metadata else None,
+                "description": getattr(metadata, 'description', None) if metadata else None,
+                "categories": getattr(metadata, 'categories', None) if metadata else None,
+                "tags": getattr(metadata, 'tags', None) if metadata else None,
+                "content": html_formatted or text_content,
+                "text_content": text_content,
+                "excerpt": text_content[:200] + "..." if text_content and len(text_content) > 200 else text_content,
+                "word_count": len(text_content.split()) if text_content else 0,
+                "language": getattr(metadata, 'language', None) if metadata else None,
+                "rendering_method": "playwright"
+            }
+            
+            # 成功解析，返回結果
+            print(f"[Playwright] ✅ 第 {attempt} 次嘗試成功")
+            return {
+                "success": True,
+                "data": parsed_data,
+                "method": "playwright",
+                "attempts": attempt
+            }
+            
         except Exception as e:
-            print(f"[警告] trafilatura.extract 失敗: {e}")
-            text_content = None
-        
-        # 提取元數據
-        try:
-            metadata = trafilatura.extract_metadata(html_content)
-        except Exception as e:
-            print(f"[警告] trafilatura.extract_metadata 失敗: {e}")
-            metadata = None
-        
-        # 提取 XML 格式內容
-        try:
-            html_formatted = trafilatura.extract(
-                html_content,
-                include_comments=False,
-                include_tables=True,
-                no_fallback=False,
-                output_format='xml'
-            )
-        except Exception as e:
-            print(f"[警告] trafilatura.extract (XML) 失敗: {e}")
-            html_formatted = None
-        
-        # 整理回傳資料
-        parsed_data = {
-            "title": getattr(metadata, 'title', None) if metadata else None,
-            "author": getattr(metadata, 'author', None) if metadata else None,
-            "date_published": getattr(metadata, 'date', None) if metadata else None,
-            "url": getattr(metadata, 'url', url) if metadata else url,
-            "domain": getattr(metadata, 'sitename', None) if metadata else None,
-            "description": getattr(metadata, 'description', None) if metadata else None,
-            "categories": getattr(metadata, 'categories', None) if metadata else None,
-            "tags": getattr(metadata, 'tags', None) if metadata else None,
-            "content": html_formatted or text_content,
-            "text_content": text_content,
-            "excerpt": text_content[:200] + "..." if text_content and len(text_content) > 200 else text_content,
-            "word_count": len(text_content.split()) if text_content else 0,
-            "language": getattr(metadata, 'language', None) if metadata else None,
-            "rendering_method": "playwright"
-        }
-        
-        return {
-            "success": True,
-            "data": parsed_data,
-            "method": "playwright"
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"使用 Playwright 解析失敗: {str(e)}"
-        )
+            last_error = e
+            print(f"[Playwright] ❌ 第 {attempt} 次嘗試失敗: {str(e)}")
+            
+            if attempt == max_retries:
+                # 所有重試都失敗了
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"使用 Playwright 解析失敗（已重試 {max_retries} 次）: {str(e)}"
+                )
+    
+    # 理論上不會到達這裡
+    raise HTTPException(
+        status_code=500,
+        detail=f"使用 Playwright 解析失敗: {str(last_error)}"
+    )
 
 
 def decode_google_url(google_url: str) -> Optional[str]:
