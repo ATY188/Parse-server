@@ -1,0 +1,7 @@
+# 輕量級依賴 - 只用於 Google URL Decoder
+# 不包含 Playwright、trafilatura 等重量級套件
+
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.2
+

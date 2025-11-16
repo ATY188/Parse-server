@@ -1,0 +1,23 @@
+# 輕量級 Dockerfile - 只用於 Google URL Decoder
+# 不包含 Playwright 和其他重量級依賴
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# 只安裝必要的套件
+COPY requirements.decoder.txt ./
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.decoder.txt
+
+# 只複製 decoder server
+COPY decoder-server.py ./
+
+EXPOSE 8000
+
+# 啟動輕量級 decoder server
+CMD ["sh", "-c", "uvicorn decoder-server:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
+
