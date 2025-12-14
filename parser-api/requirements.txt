@@ -1,0 +1,20 @@
+# Python 網頁內容解析器 API 所需套件
+# 不指定具體版本，讓 pip 自動選擇兼容版本
+
+# Web 框架
+fastapi
+uvicorn[standard]
+
+# HTTP 客戶端
+httpx
+
+# 網頁內容解析
+trafilatura
+
+# 瀏覽器自動化（用於動態網站）
+# 鎖定版本避免自動升級造成問題
+playwright==1.40.0
+
+# 資料驗證
+pydantic
+
