@@ -26,11 +26,16 @@ import asyncio
 import random
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
+# ==================== 併發控制 ====================
+# 🔧 修復 BlockingIOError: 限制同時運行的 Playwright 實例數量
+# Railway Pro Plan 建議最多 2-3 個並發實例
+PLAYWRIGHT_SEMAPHORE = asyncio.Semaphore(2)
+
 # 建立 FastAPI 應用
 app = FastAPI(
     title="網頁內容解析器 API（增強版 + 智慧路由）",
     description="使用 trafilatura 自動提取網頁文章內容，支援重試和錯誤處理，智慧路由優化",
-    version="1.6.0"
+    version="1.7.0"  # 版本升級
 )
 
 # ==================== CORS 配置 ====================
@@ -257,154 +262,188 @@ async def fetch_with_playwright(
     Raises:
         Exception: 當瀏覽器操作失敗時
     """
-    async with async_playwright() as p:
-        browser = None  # 初始化變數，確保 finally 可以檢查
-        try:
-            # 啟動 Chromium 瀏覽器（無頭模式）
-            print(f"[Playwright] 啟動瀏覽器...")
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    '--disable-blink-features=AutomationControlled',  # 禁用自動化控制特徵
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                ]
-            )
-            
-            # 創建新的瀏覽器上下文（模擬真實用戶）
-            context = await browser.new_context(
-                user_agent=get_random_user_agent(),
-                viewport={'width': 1920, 'height': 1080},
-                locale='zh-TW',
-                timezone_id='Asia/Taipei',
-                color_scheme='light',
-                extra_http_headers={
-                    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                }
-            )
-            
-            # 如果啟用廣告屏蔽
-            if block_ads:
-                print(f"[Playwright] 啟用廣告屏蔽")
-                ad_domains = [
-                    'doubleclick.net', 'googlesyndication.com', 'googletagmanager.com',
-                    'google-analytics.com', 'facebook.com/tr/', 'scorecardresearch.com',
-                    'ad.doubleclick.net', 'static.ads-twitter.com', 'ads.yahoo.com',
-                    'pagead2.googlesyndication.com', 'adservice.google.com',
-                    'analytics.google.com', 'googleadservices.com'
-                ]
+    # 🔧 使用信號量控制併發，避免 BlockingIOError
+    async with PLAYWRIGHT_SEMAPHORE:
+        print(f"[Playwright] 🔒 獲取併發鎖...")
+        
+        async with async_playwright() as p:
+            browser = None  # 初始化變數，確保 finally 可以檢查
+            context = None
+            try:
+                # 啟動 Chromium 瀏覽器（無頭模式）
+                print(f"[Playwright] 啟動瀏覽器...")
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        # 基本設定
+                        '--disable-blink-features=AutomationControlled',  # 禁用自動化控制特徵
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        # 🔧 修復 BlockingIOError - 記憶體和資源優化
+                        '--disable-dev-shm-usage',          # 不使用 /dev/shm（關鍵修復！）
+                        '--disable-gpu',                     # 禁用 GPU（容器環境）
+                        '--disable-software-rasterizer',     # 禁用軟體光柵化
+                        '--single-process',                  # 單進程模式（減少資源消耗）
+                        '--no-zygote',                       # 禁用 zygote 進程
+                        # 記憶體優化
+                        '--disable-extensions',              # 禁用擴充
+                        '--disable-background-networking',   # 禁用背景網路
+                        '--disable-sync',                    # 禁用同步
+                        '--disable-translate',               # 禁用翻譯
+                        '--disable-features=TranslateUI',
+                        '--disable-default-apps',            # 禁用預設應用
+                        '--mute-audio',                      # 靜音
+                        '--hide-scrollbars',                 # 隱藏滾動條
+                        # 穩定性
+                        '--disable-hang-monitor',            # 禁用掛起監控
+                        '--disable-prompt-on-repost',        # 禁用重新提交提示
+                        '--disable-component-update',        # 禁用組件更新
+                        '--ignore-certificate-errors',       # 忽略證書錯誤
+                    ]
+                )
                 
-                await context.route("**/*", lambda route: (
-                    route.abort() if any(ad in route.request.url for ad in ad_domains)
-                    else route.continue_()
-                ))
-            
-            # 創建新頁面
-            page = await context.new_page()
-            
-            # 如果啟用反爬蟲模式
-            if stealth_mode:
-                print(f"[Playwright] 啟用反爬蟲模式")
-                # 隱藏 webdriver 特徵
-                await page.add_init_script("""
-                    // 移除 webdriver 標記
-                    Object.defineProperty(navigator, 'webdriver', {
-                        get: () => false
-                    });
+                # 創建新的瀏覽器上下文（模擬真實用戶）
+                context = await browser.new_context(
+                    user_agent=get_random_user_agent(),
+                    viewport={'width': 1920, 'height': 1080},
+                    locale='zh-TW',
+                    timezone_id='Asia/Taipei',
+                    color_scheme='light',
+                    extra_http_headers={
+                        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                    }
+                )
+                
+                # 如果啟用廣告屏蔽
+                if block_ads:
+                    print(f"[Playwright] 啟用廣告屏蔽")
+                    ad_domains = [
+                        'doubleclick.net', 'googlesyndication.com', 'googletagmanager.com',
+                        'google-analytics.com', 'facebook.com/tr/', 'scorecardresearch.com',
+                        'ad.doubleclick.net', 'static.ads-twitter.com', 'ads.yahoo.com',
+                        'pagead2.googlesyndication.com', 'adservice.google.com',
+                        'analytics.google.com', 'googleadservices.com'
+                    ]
                     
-                    // 偽裝 Chrome 對象
-                    window.chrome = {
-                        runtime: {}
-                    };
-                    
-                    // 修改 permissions
-                    const originalQuery = window.navigator.permissions.query;
-                    window.navigator.permissions.query = (parameters) => (
-                        parameters.name === 'notifications' ?
-                            Promise.resolve({ state: Notification.permission }) :
-                            originalQuery(parameters)
-                    );
-                    
-                    // 偽裝 plugins
-                    Object.defineProperty(navigator, 'plugins', {
-                        get: () => [1, 2, 3, 4, 5]
-                    });
-                    
-                    // 偽裝 languages
-                    Object.defineProperty(navigator, 'languages', {
-                        get: () => ['zh-TW', 'zh', 'en-US', 'en']
-                    });
-                """)
-            
-            # 訪問網頁（使用更寬鬆的策略以提升穩定性）
-            print(f"[Playwright] 正在訪問: {url}")
-            await page.goto(url, wait_until='domcontentloaded', timeout=90000)  # 90 秒，使用 domcontentloaded 策略
-            
-            # 隨機延遲（模擬人類行為）
-            delay = random.uniform(1, 2.5)
-            print(f"[Playwright] 隨機延遲 {delay:.1f} 秒...")
-            await asyncio.sleep(delay)
-            
-            # 移除廣告元素（DOM 層面）
-            if block_ads:
+                    await context.route("**/*", lambda route: (
+                        route.abort() if any(ad in route.request.url for ad in ad_domains)
+                        else route.continue_()
+                    ))
+                
+                # 創建新頁面
+                page = await context.new_page()
+                
+                # 如果啟用反爬蟲模式
+                if stealth_mode:
+                    print(f"[Playwright] 啟用反爬蟲模式")
+                    # 隱藏 webdriver 特徵
+                    await page.add_init_script("""
+                        // 移除 webdriver 標記
+                        Object.defineProperty(navigator, 'webdriver', {
+                            get: () => false
+                        });
+                        
+                        // 偽裝 Chrome 對象
+                        window.chrome = {
+                            runtime: {}
+                        };
+                        
+                        // 修改 permissions
+                        const originalQuery = window.navigator.permissions.query;
+                        window.navigator.permissions.query = (parameters) => (
+                            parameters.name === 'notifications' ?
+                                Promise.resolve({ state: Notification.permission }) :
+                                originalQuery(parameters)
+                        );
+                        
+                        // 偽裝 plugins
+                        Object.defineProperty(navigator, 'plugins', {
+                            get: () => [1, 2, 3, 4, 5]
+                        });
+                        
+                        // 偽裝 languages
+                        Object.defineProperty(navigator, 'languages', {
+                            get: () => ['zh-TW', 'zh', 'en-US', 'en']
+                        });
+                    """)
+                
+                # 訪問網頁（使用更寬鬆的策略以提升穩定性）
+                print(f"[Playwright] 正在訪問: {url}")
+                await page.goto(url, wait_until='domcontentloaded', timeout=90000)  # 90 秒，使用 domcontentloaded 策略
+                
+                # 隨機延遲（模擬人類行為）
+                delay = random.uniform(1, 2.5)
+                print(f"[Playwright] 隨機延遲 {delay:.1f} 秒...")
+                await asyncio.sleep(delay)
+                
+                # 移除廣告元素（DOM 層面）
+                if block_ads:
+                    await page.evaluate("""() => {
+                        // 移除常見廣告元素
+                        const selectors = [
+                            '[class*="ad-"]', '[class*="ad_"]', '[id*="ad-"]', '[id*="ad_"]',
+                            '[class*="advertisement"]', '[class*="banner"]',
+                            'iframe[src*="ads"]', 'iframe[src*="doubleclick"]',
+                            '.ad', '.ads', '#ad', '#ads'
+                        ];
+                        
+                        selectors.forEach(selector => {
+                            try {
+                                document.querySelectorAll(selector).forEach(el => el.remove());
+                            } catch(e) {}
+                        });
+                    }""")
+                
+                # 如果指定了等待元素，等待該元素出現
+                if wait_for:
+                    print(f"[Playwright] 等待元素: {wait_for}")
+                    try:
+                        await page.wait_for_selector(wait_for, timeout=20000)  # 增加到 20 秒
+                    except:
+                        print(f"[Playwright] 警告：元素 {wait_for} 未找到，繼續提取內容")
+                
+                # 滾動頁面以觸發懶加載（優化版：快速分段滾動）
+                print(f"[Playwright] 滾動頁面以載入動態內容...")
                 await page.evaluate("""() => {
-                    // 移除常見廣告元素
-                    const selectors = [
-                        '[class*="ad-"]', '[class*="ad_"]', '[id*="ad-"]', '[id*="ad_"]',
-                        '[class*="advertisement"]', '[class*="banner"]',
-                        'iframe[src*="ads"]', 'iframe[src*="doubleclick"]',
-                        '.ad', '.ads', '#ad', '#ads'
-                    ];
-                    
-                    selectors.forEach(selector => {
-                        try {
-                            document.querySelectorAll(selector).forEach(el => el.remove());
-                        } catch(e) {}
+                    // 快速分段滾動到頁面不同位置
+                    const positions = [0.3, 0.6, 1.0];  // 30%, 60%, 100%
+                    positions.forEach((ratio, index) => {
+                        setTimeout(() => {
+                            window.scrollTo(0, document.body.scrollHeight * ratio);
+                        }, index * 400);  // 每 400ms 滾動一次
                     });
                 }""")
+                
+                # 再等待一下，確保內容載入完成（給懶加載更多時間）
+                await asyncio.sleep(2)
             
-            # 如果指定了等待元素，等待該元素出現
-            if wait_for:
-                print(f"[Playwright] 等待元素: {wait_for}")
-                try:
-                    await page.wait_for_selector(wait_for, timeout=20000)  # 增加到 20 秒
-                except:
-                    print(f"[Playwright] 警告：元素 {wait_for} 未找到，繼續提取內容")
-            
-            # 滾動頁面以觸發懶加載（優化版：快速分段滾動）
-            print(f"[Playwright] 滾動頁面以載入動態內容...")
-            await page.evaluate("""() => {
-                // 快速分段滾動到頁面不同位置
-                const positions = [0.3, 0.6, 1.0];  // 30%, 60%, 100%
-                positions.forEach((ratio, index) => {
-                    setTimeout(() => {
-                        window.scrollTo(0, document.body.scrollHeight * ratio);
-                    }, index * 400);  // 每 400ms 滾動一次
-                });
-            }""")
-            
-            # 再等待一下，確保內容載入完成（給懶加載更多時間）
-            await asyncio.sleep(2)
-            
-            # 獲取渲染後的 HTML
-            html_content = await page.content()
-            
-            print(f"[Playwright] ✅ 成功獲取內容，長度: {len(html_content)}")
-            return html_content
-            
-        except PlaywrightTimeout as e:
-            raise Exception(f"Playwright 超時: {str(e)}")
-        except Exception as e:
-            raise Exception(f"Playwright 錯誤: {str(e)}")
-        finally:
-            # ⚠️ 重要：確保瀏覽器一定會被關閉，避免記憶體洩漏
-            if browser:
-                try:
-                    await browser.close()
-                    print(f"[Playwright] 🧹 瀏覽器已關閉")
-                except:
-                    pass  # 忽略關閉時的錯誤
+                # 獲取渲染後的 HTML
+                html_content = await page.content()
+                
+                print(f"[Playwright] ✅ 成功獲取內容，長度: {len(html_content)}")
+                return html_content
+                
+            except PlaywrightTimeout as e:
+                raise Exception(f"Playwright 超時: {str(e)}")
+            except Exception as e:
+                raise Exception(f"Playwright 錯誤: {str(e)}")
+            finally:
+                # ⚠️ 重要：確保瀏覽器一定會被關閉，避免記憶體洩漏
+                # 🔧 按順序關閉：先 context，再 browser
+                if context:
+                    try:
+                        await context.close()
+                        print(f"[Playwright] 🧹 Context 已關閉")
+                    except:
+                        pass
+                if browser:
+                    try:
+                        await browser.close()
+                        print(f"[Playwright] 🧹 瀏覽器已關閉")
+                    except:
+                        pass  # 忽略關閉時的錯誤
+                print(f"[Playwright] 🔓 釋放併發鎖")
 
 
 async def fetch_and_parse_with_playwright(
@@ -572,7 +611,7 @@ async def root():
     return {
         "message": "歡迎使用網頁內容解析器 API (Python 增強版 + 智慧路由)",
         "framework": "FastAPI + trafilatura + Playwright",
-        "version": "1.6.0",
+        "version": "1.7.0",
         "features": [
             "🧠 智慧路由（根據域名自動選擇最佳解析方式）",
             "⛔ 黑名單機制（跳過已知無法解析的網站，節省時間）",
@@ -586,7 +625,9 @@ async def root():
             "🚀 Playwright 支援（處理動態 JavaScript 網站）",
             "🚫 廣告屏蔽（Network 和 DOM 層面）",
             "🥷 反爬蟲模式（隱藏 webdriver 特徵）",
-            "📜 自動滾動載入懶加載內容"
+            "📜 自動滾動載入懶加載內容",
+            "🔒 併發控制（限制同時運行的瀏覽器數量，避免資源耗盡）",
+            "🛡️ 容器優化（修復 BlockingIOError，禁用 /dev/shm 依賴）"
         ],
         "smartRouting": {
             "description": "智慧路由根據域名歷史表現自動選擇最佳解析策略",
@@ -1262,7 +1303,7 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "service": "parser-api",
-        "version": "1.6.0",
+        "version": "1.7.0",
         "features": [
             "retry-mechanism",
             "enhanced-headers",
@@ -1271,7 +1312,9 @@ async def health_check():
             "playwright-dynamic-rendering",
             "ad-blocking",
             "anti-bot-detection",
-            "lazy-loading-support"
+            "lazy-loading-support",
+            "concurrency-control",
+            "container-optimized"
         ]
     }
 
@@ -1280,7 +1323,7 @@ if __name__ == "__main__":
     # 從環境變數讀取埠號（Railway 會提供），預設 3000
     port = int(os.getenv("PORT", 3000))
     
-    print("🚀 Parser 伺服器已啟動！（Python 增強版 v1.6.0）")
+    print("🚀 Parser 伺服器已啟動！（Python 增強版 v1.7.0）")
     print(f"📡 監聽埠號: {port}")
     print(f"🌐 本地訪問: http://localhost:{port}")
     print(f"📚 API 文件: http://localhost:{port}/docs")
@@ -1289,6 +1332,8 @@ if __name__ == "__main__":
     print("  ✓ 隨機 User-Agent")
     print("  ✓ SSL 錯誤處理")
     print("  ✓ 指數退避重試")
+    print("  ✓ 併發控制（最多 2 個同時運行的瀏覽器）")
+    print("  ✓ 容器優化（修復 BlockingIOError）")
     print("\n使用範例:")
     print(f"  POST http://localhost:{port}/api/parse")
     print('  Body: {"url": "https://example.com/article", "max_retries": 3}')

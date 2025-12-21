@@ -1,7 +1,9 @@
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
 
 WORKDIR /app
 
@@ -44,15 +46,19 @@ RUN apt-get update && apt-get install -y \
     libxtst6 \
     lsb-release \
     xdg-utils \
+    procps \
     && rm -rf /var/lib/apt/lists/*
+
+# 創建共享記憶體目錄
+RUN mkdir -p /dev/shm && chmod 1777 /dev/shm
 
 # 安裝 Python 套件
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# 安裝 Playwright 瀏覽器（含所有依賴）
-RUN playwright install --with-deps chromium
+# 安裝 Playwright 瀏覽器（只安裝瀏覽器，不安裝依賴）
+RUN playwright install chromium
 
 COPY . .
 
