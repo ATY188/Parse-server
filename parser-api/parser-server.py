@@ -46,6 +46,10 @@ def cleanup_chromium_temp():
         '/tmp/chromium*',
         '/tmp/.X*-lock',
         '/tmp/core.*',
+        '/tmp/Temp-*',
+        '/tmp/.font-unix',
+        '/tmp/snap.*',
+        '/tmp/rust_mozprofile*',
     ]
     cleaned = 0
     for pattern in patterns:
@@ -58,8 +62,11 @@ def cleanup_chromium_temp():
                 cleaned += 1
             except:
                 pass
+    # 總是輸出清理結果，方便觀察是否有殘留
     if cleaned > 0:
         print(f"[Cleanup] 🧹 已清理 {cleaned} 個臨時文件/目錄")
+    else:
+        print("[Cleanup] ✅ /tmp 目錄乾淨，無需清理")
     return cleaned
 
 
