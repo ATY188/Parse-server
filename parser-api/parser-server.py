@@ -645,7 +645,7 @@ async def root():
     return {
         "message": "歡迎使用網頁內容解析器 API (Python 增強版 + 智慧路由)",
         "framework": "FastAPI + trafilatura + Playwright",
-        "version": "1.7.0",
+        "version": "1.8.0",
         "features": [
             "🧠 智慧路由（根據域名自動選擇最佳解析方式）",
             "⛔ 黑名單機制（跳過已知無法解析的網站，節省時間）",
@@ -1337,7 +1337,7 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "service": "parser-api",
-        "version": "1.7.0",
+        "version": "1.8.0",
         "features": [
             "retry-mechanism",
             "enhanced-headers",
