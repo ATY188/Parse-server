@@ -24,6 +24,8 @@ import uvicorn
 import os
 import asyncio
 import random
+import shutil
+import glob
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 # ==================== 併發控制 ====================
@@ -31,11 +33,41 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 # Railway Pro Plan 建議最多 2-3 個並發實例
 PLAYWRIGHT_SEMAPHORE = asyncio.Semaphore(2)
 
+# ==================== /tmp 清理功能 ====================
+def cleanup_chromium_temp():
+    """
+    清理 Chromium/Playwright 產生的臨時文件
+    防止 /tmp 空間被佔滿導致無法啟動新的瀏覽器
+    """
+    patterns = [
+        '/tmp/.org.chromium.*',
+        '/tmp/playwright*',
+        '/tmp/.com.google.Chrome.*',
+        '/tmp/chromium*',
+        '/tmp/.X*-lock',
+        '/tmp/core.*',
+    ]
+    cleaned = 0
+    for pattern in patterns:
+        for path in glob.glob(pattern):
+            try:
+                if os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    os.remove(path)
+                cleaned += 1
+            except:
+                pass
+    if cleaned > 0:
+        print(f"[Cleanup] 🧹 已清理 {cleaned} 個臨時文件/目錄")
+    return cleaned
+
+
 # 建立 FastAPI 應用
 app = FastAPI(
     title="網頁內容解析器 API（增強版 + 智慧路由）",
     description="使用 trafilatura 自動提取網頁文章內容，支援重試和錯誤處理，智慧路由優化",
-    version="1.7.0"  # 版本升級
+    version="1.8.0"  # 版本升級
 )
 
 # ==================== CORS 配置 ====================
@@ -444,6 +476,8 @@ async def fetch_with_playwright(
                     except:
                         pass  # 忽略關閉時的錯誤
                 print(f"[Playwright] 🔓 釋放併發鎖")
+                # 🧹 清理 Chromium 臨時文件，防止 /tmp 空間耗盡
+                cleanup_chromium_temp()
 
 
 async def fetch_and_parse_with_playwright(
